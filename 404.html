@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex">
+<title>Switchboard</title>
+<style>
+  body { margin: 0; padding: 28px 16px; font: 17px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; background: #F1EFE8; color: #1D1E1B; }
+  @media (prefers-color-scheme: dark) { body { background: #161714; color: #ECEAE2; } a { color: #F3C22F; } }
+  main { max-width: 520px; margin: 0 auto; }
+  h1 { font: 700 30px/1.1 "Arial Narrow", system-ui, sans-serif; text-transform: uppercase; margin: 0 0 10px; }
+  code { font-size: 15px; overflow-wrap: anywhere; }
+</style>
+<script>
+// The resolver. A sticker holds https://tag.junkdrawer.works/<letter>/<id>; GitHub Pages answers every such address
+// with this page, which sends the phone on to the app that owns the letter. Keep ROUTES in step with js/kit/tags.js
+// (test/e2e.mjs checks). To send one sticker somewhere else, add it to OVERRIDES: 'h/water-heater': 'https://…'.
+var ROUTES = {
+  h: 'https://placard.junkdrawer.works/',
+  t: 'https://mothball.junkdrawer.works/',
+  p: 'https://larder.junkdrawer.works/',
+  f: 'https://frostbite.junkdrawer.works/',
+  m: 'https://packrat.junkdrawer.works/',
+  s: 'https://tag.junkdrawer.works/'
+};
+var OVERRIDES = {
+};
+(function () {
+  var m = /^\/([a-z])\/([a-z0-9][a-z0-9-]{0,39})\/?$/i.exec(location.pathname);
+  if (!m) return;
+  var key = m[1].toLowerCase() + '/' + m[2].toLowerCase();
+  var to = OVERRIDES[key] || (ROUTES[m[1].toLowerCase()] ? ROUTES[m[1].toLowerCase()] + '#' + m[2].toLowerCase() : null);
+  if (to) { window.__to = to; location.replace(to); }
+})();
+</script>
+</head>
+<body>
+<main>
+  <h1>This tag isn't set up</h1>
+  <p>The sticker you tapped points at <code id="here"></code>, which doesn't belong to any app yet.</p>
+  <p><a href="https://tag.junkdrawer.works/">Switchboard</a> explains what these tags are.</p>
+</main>
+<script>document.getElementById('here').textContent = location.host + location.pathname;</script>
+</body>
+</html>

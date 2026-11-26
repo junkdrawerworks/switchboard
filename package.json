@@ -1,0 +1,9 @@
+{
+  "name": "switchboard",
+  "private": true,
+  "type": "module",
+  "description": "One link on every sticker, sent on to the app that owns it.",
+  "scripts": {
+    "test": "node --test test/*.test.mjs && node test/e2e.mjs"
+  }
+}
