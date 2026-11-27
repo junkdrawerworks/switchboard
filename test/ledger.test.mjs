@@ -879,3 +879,65 @@ test('a delete made again while an earlier send of the same delete is still on i
   assert.equal(b.pending, 0);
   assert.equal(sheet('mothball', 'totes')['01']._deleted, true, 'the second delete never reached the sheet');
 });
+
+test('a sync on its way in another tab when the phone moves to a different ledger brings nothing of the old sheet', async () => {
+  globalThis.localStorage = store();
+  const { Ledger, adopt } = await import('../js/kit/ledger.js');
+  const trial = fakeGoogle(), real = fakeGoogle();
+  trial.g.setup(); real.g.setup();
+  post(real.g, { key: real.props.KEY, op: 'put', app: 'frostbite', coll: 'items', id: 'stew', doc: { name: 'Beef stew' } });
+  real.sheets['frostbite.items'].data[1][1] = Date.now() - 86400e3;   // saved on the real sheet yesterday
+  post(trial.g, { key: trial.props.KEY, op: 'put', app: 'frostbite', coll: 'items', id: 'test', doc: { name: 'Test item' } });
+  const TRIAL = 'https://script.google.com/macros/s/TRIAL/exec', REAL = 'https://script.google.com/macros/s/REAL/exec';
+  let slow = null;
+  const fetchImpl = async (url, o) => {
+    const body = JSON.parse(o.body), G = url === TRIAL ? trial : real;
+    const text = JSON.stringify(post(G.g, body));                    // Google reads it now...
+    if (slow && url === TRIAL && body.op === 'list') await slow;      // ...and the answer is slow to come back
+    return { ok: true, status: 200, json: async () => JSON.parse(text) };
+  };
+  const a = new Ledger('frostbite', { fetchImpl }); opened.push(a);
+  a.setConfig(TRIAL, trial.props.KEY); await a.sync(['items']);
+  const b = new Ledger('frostbite', { fetchImpl }); opened.push(b); b.colls = ['items'];   // a second tab of the app
+  let release; slow = new Promise(r => { release = r; });
+  const onItsWay = b.sync(['items']);                               // b's list has reached the trial sheet
+  await tick(); await tick();
+  adopt('frostbite', REAL, real.props.KEY);                         // a connect link for the real ledger, taken in a (it reloads)
+  b.reconfig();                                                     // b hears of it (the storage event)
+  release(); await onItsWay; await b.sync(['items']);
+  const a2 = new Ledger('frostbite', { fetchImpl }); opened.push(a2); await a2.sync(['items']);   // a after its reload
+  assert.deepEqual(a2.docs('items').map(d => d.name), ['Beef stew'], 'what the phone shows for the real ledger');
+  assert.deepEqual(b.docs('items').map(d => d.name), ['Beef stew']);
+  assert.ok(b.synced('items'));
+});
+
+test('a list answered from the old sheet after this tab missed the new address is dropped, and the next sync starts fresh', async () => {
+  globalThis.localStorage = store();
+  const { Ledger, adopt } = await import('../js/kit/ledger.js');
+  const trial = fakeGoogle(), real = fakeGoogle();
+  trial.g.setup(); real.g.setup();
+  post(real.g, { key: real.props.KEY, op: 'put', app: 'mothball', coll: 'totes', id: '01', doc: { name: 'Porch lights' } });
+  post(trial.g, { key: trial.props.KEY, op: 'put', app: 'mothball', coll: 'totes', id: '01', doc: { name: 'Trial tote' } });
+  post(trial.g, { key: trial.props.KEY, op: 'put', app: 'mothball', coll: 'totes', id: '02', doc: { name: 'Another trial tote' } });
+  const TRIAL = 'https://script.google.com/macros/s/TRIAL/exec', REAL = 'https://script.google.com/macros/s/REAL/exec';
+  let slow = null;
+  const fetchImpl = async (url, o) => {
+    const body = JSON.parse(o.body), G = url === TRIAL ? trial : real;
+    const text = JSON.stringify(post(G.g, body));
+    if (slow && url === TRIAL && body.op === 'list') await slow;
+    return { ok: true, status: 200, json: async () => JSON.parse(text) };
+  };
+  const b = new Ledger('mothball', { fetchImpl }); opened.push(b);
+  b.setConfig(TRIAL, trial.props.KEY);
+  let release; slow = new Promise(r => { release = r; });
+  const onItsWay = b.sync(['totes', 'builds']);
+  await tick(); await tick();
+  adopt('mothball', REAL, real.props.KEY);   // another tab took a connect link; this one hasn't had the storage event yet
+  release();
+  assert.equal(await onItsWay, false, 'the old sheet\'s answer counted as a sync');
+  assert.equal(b.cfg.url, REAL, 'the tab still talks to the old sheet');
+  assert.equal(b.synced('totes'), false, 'the new ledger counts as heard from');
+  assert.deepEqual(JSON.parse(localStorage.getItem('mothball.m.totes') || 'null')?.docs || {}, {}, 'the old sheet\'s records were saved for the new one');
+  await b.sync(['totes', 'builds']);
+  assert.deepEqual(b.docs('totes').map(d => d.name), ['Porch lights']);
+});

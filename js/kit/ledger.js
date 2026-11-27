@@ -219,7 +219,8 @@ export class Ledger {
     this.cfg = cfg;
     this.state = this.connected ? 'idle' : 'unset';
     this.emit(); this.changed();
-    if (this.connected && this.colls) this.sync(this.colls);
+    // a fresh sync, after the one on its way (which, asked of the old sheet, brings nothing back: see _sync)
+    if (this.connected && this.colls) (this._syncing || Promise.resolve()).then(() => this.sync(this.colls));
   }
   on(fn) { this.listeners.add(fn); return () => this.listeners.delete(fn); }
   emit() { for (const fn of this.listeners) try { fn(this); } catch (e) { console.warn(e); } }
@@ -377,7 +378,11 @@ export class Ledger {
     this._syncing = this._sync(colls).finally(() => { this._syncing = null; });
     return this._syncing;
   }
+  // True when this phone has been connected to a different ledger (in another tab) since this page last looked; it
+  // takes the new one up (reconfig).
+  moved() { const now = jget(this.app + '.ledger') || {}; if (now.url === this.cfg.url) return false; this.reconfig(); return true; }
   async _sync(colls) {
+    const url = this.cfg.url;                        // the sheet these lists are asked of
     const had = this.pending, sent = await this.flush();
     const ready = colls.map(c => this.synced(c)).join();
     let changed = false, ok = false;
@@ -385,6 +390,9 @@ export class Ledger {
       for (const coll of colls) {
         const asked = Date.now(), waitingThen = this.waiting(coll);
         const j = await this.call({ op: 'list', app: this.app, coll, since: this.m(coll).since });
+        // the phone moved to another ledger while this was asked: the old sheet's answer isn't the new one's copy,
+        // and nothing is saved (not even that the new ledger has been heard from)
+        if (this.cfg.url !== url || this.moved()) return false;
         const mm = this.m(coll), touched = this.touched();
         const waiting = new Set([...waitingThen, ...this.waiting(coll)]);
         const newest = {};                           // one record per id, should the sheet have two rows for one
