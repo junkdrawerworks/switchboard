@@ -2,3 +2,5 @@
 :root { --accent: #1D1E1B; --accent-ink: #F6F4EC; --tape: #F3C22F; --tape-ink: #1D1E1B; --tape-edge: #C99A12; }
 @media (prefers-color-scheme: dark) { :root { --accent: #F3C22F; --accent-ink: #161714; } }
 #check-out .tape { font-size: clamp(28px, 8vw, 40px); }
+/* The Letters table on the narrowest phones (320 px): tighter cells, so "junkdrawer." fits beside the app names. */
+@media (max-width: 359px) { #routes .tbl th, #routes .tbl td { padding-left: 4px; padding-right: 4px; } }

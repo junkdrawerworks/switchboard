@@ -157,6 +157,11 @@ export async function appChecks({ page, ctx, base, assert, problems }) {
   assert.ok(t.h < 50, `the toast wrapped onto ${Math.round(t.h)} px of lines`);
   assert.ok(Math.abs(t.left - t.right) < 2 && t.left >= 16, `the toast isn't centred with its margins: ${JSON.stringify(t)}`);
   assert.equal(await page.locator('#route-rows tr').count(), 6, 'six letters in the table');
+  // every address whole on a phone, none cut off at the table's edge
+  const letters = await page.locator('#routes').evaluate(el => ({ fits: el.querySelector('.tbl').scrollWidth <= el.querySelector('.tbl').clientWidth,
+    to: [...el.querySelectorAll('#route-rows td:last-child')].map(td => td.textContent) }));
+  assert.deepEqual(letters, { fits: true, to: ['placard.junkdrawer.works', 'mothball.junkdrawer.works', 'larder.junkdrawer.works',
+    'frostbite.junkdrawer.works', 'packrat.junkdrawer.works', 'tag.junkdrawer.works'] }, 'the Letters table cuts the addresses off');
   assert.equal(await page.locator('#app-list li').count(), 5, 'five apps to connect');
   assert.match(await page.locator('#app-list').innerText(), /ledger first/, 'apps wait for the ledger');
   assert.equal(await page.locator('#test-panel .url').innerText(), 'https://tag.junkdrawer.works/s/test');

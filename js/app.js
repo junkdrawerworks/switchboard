@@ -106,7 +106,9 @@ function renderApps() {
 
 // ---- test sticker and letters
 mount($('#test-panel'), nfcPanel(tagUrl('s', 'test'), { label: 'Write test sticker' }));
-mount($('#route-rows'), Object.entries(APPS).map(([l, a]) => h('tr', {}, h('td', { class: 'm' }, l), h('td', {}, a.name), h('td', { class: 'm' }, a.base.replace('https://', '')))));
+// Each address may break after a dot (placard. / junkdrawer.works), so the table fits a phone instead of cutting it off.
+const host = base => base.replace(/^https:\/\/|\/$/g, '').split(/(?<=\.)/).flatMap((part, i) => (i ? [h('wbr'), part] : [part]));
+mount($('#route-rows'), Object.entries(APPS).map(([l, a]) => h('tr', {}, h('td', { class: 'm' }, l), h('td', {}, a.name), h('td', { class: 'm' }, host(a.base)))));
 
 ledger.on(renderLedger);
 fillFields();
