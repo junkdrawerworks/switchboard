@@ -1,7 +1,7 @@
 // The kit's small helpers (js/kit/ui.js) that need no page.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { ageText, agoText, stampText, route, lines, parseDay, dayText, toastMs } from '../js/kit/ui.js';
+import { ageText, agoText, daysSince, stampText, route, lines, parseDay, dayText, toastMs } from '../js/kit/ui.js';
 
 const now = new Date(2026, 10, 27, 15, 0);   // 27 Nov 2026, 3 pm, local time
 const day = n => { const d = new Date(2026, 10, 27 - n); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
@@ -17,6 +17,21 @@ test('how long ago reads right on the first day, the second, the third and a mon
   assert.equal(ageText(day(1), now), '1 day');
   assert.equal(ageText(day(2), now), '2 days');
   assert.equal(ageText(day(31), now), '4 wk');
+});
+
+test('days are counted on the calendar: the spring clock change loses none', () => {
+  const was = process.env.TZ;
+  process.env.TZ = 'America/Chicago';   // the clocks went forward on Mar 8, 2026: that day had 23 hours
+  try {
+    const mar15 = new Date(2026, 2, 15, 12);
+    assert.equal(daysSince('2026-03-01', mar15), 14);
+    assert.equal(ageText('2026-03-01', mar15), '2 wk', 'Mar 1 to Mar 15 read 13 days');
+    assert.equal(agoText('2026-03-08', new Date(2026, 2, 9, 0, 30)), 'yesterday', 'Mar 8 still read today on Mar 9');
+    assert.equal(daysSince('2026-03-08', new Date(2026, 2, 8, 23, 59)), 0);
+    assert.equal(daysSince('2026-11-01', new Date(2026, 10, 2, 0, 30)), 1, 'the fall change gains none');
+    assert.equal(daysSince('2025-11-27', new Date(2026, 10, 27, 23, 0)), 365);
+    assert.equal(daysSince('2026-11-28', new Date(2026, 10, 27, 9, 0)), -1, 'a day still to come');
+  } finally { if (was === undefined) delete process.env.TZ; else process.env.TZ = was; }
 });
 
 test('a time from another year says the year', () => {

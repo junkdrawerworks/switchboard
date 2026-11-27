@@ -100,9 +100,12 @@ export function monthsSince(day, now = new Date()) {
   const a = parseDay(day);
   return (now.getFullYear() - a.getFullYear()) * 12 + (now.getMonth() - a.getMonth()) - (now.getDate() < a.getDate() ? 1 : 0);
 }
+// Whole days from the day to today, counted on the calendar (UTC day numbers from each date's year, month and day), not
+// the clock: the spring clock change's 23-hour day would make Mar 1 to Mar 15 read 13. As Frostbite's food.js counts.
+const dayNo = t => { const u = new Date(0); u.setUTCFullYear(t.getFullYear(), t.getMonth(), t.getDate()); return u.getTime() / 864e5; };
 export function daysSince(day, now = new Date()) {
   if (!day) return null;
-  return Math.floor((parseDay(today(now)) - parseDay(day)) / 86400000);
+  return dayNo(now) - dayNo(parseDay(day));
 }
 export function ageText(day, now = new Date()) {
   const d = daysSince(day, now);
