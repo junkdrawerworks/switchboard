@@ -53,7 +53,10 @@ const until = async (ok, ms, what) => {
   for (const end = Date.now() + ms; !(await ok());) { assert.ok(Date.now() < end, what); await new Promise(r => setTimeout(r, 100)); }
 };
 
-const browser = await pw.chromium.launch({ executablePath: process.env.CHROME || undefined });
+// Only this test's server: no proxy, and every other host fails to resolve (page.route answers still work).
+const noProxy = Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^(https?|all)_proxy$/i.test(k)));
+const browser = await pw.chromium.launch({ executablePath: process.env.CHROME || undefined, env: noProxy,
+  args: ['--no-proxy-server', '--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE localhost'] });
 const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, hasTouch: true });
 const page = await ctx.newPage();
 const problems = [];
