@@ -85,7 +85,12 @@ export function confirmSheet(title, text, ok = 'OK') {
 
 // ---- dates (YYYY-MM-DD strings, local time)
 export const today = (d = new Date()) => new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
-export function parseDay(s) { const [y, m, d] = String(s).split('-').map(Number); return new Date(y, (m || 1) - 1, d || 1); }
+// Local midnight of the day. The year is set as written: new Date(26, …) would read year 26 as 1926.
+export function parseDay(s) {
+  const [y, m, d] = String(s).split('-').map(Number), t = new Date(2000, 0, 1);
+  t.setFullYear(y, (m || 1) - 1, d || 1);
+  return t;
+}
 export function monthsSince(day, now = new Date()) {
   if (!day) return null;
   const a = parseDay(day);
@@ -143,5 +148,6 @@ export function qrSvg(text, { size = 120, margin = 2 } = {}) {
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${w} ${w}" width="${size}" height="${size}" shape-rendering="crispEdges"><rect width="${w}" height="${w}" fill="#fff"/><path d="${d}" fill="#000"/></svg>`;
 }
 
-// Text with one entry per line, with any typed numbering or bullets taken off.
-export const lines = text => String(text || '').split('\n').map(l => l.replace(/^\s*(\d+[.)]|[-*•])\s*/, '').trim()).filter(Boolean);
+// Text with one entry per line, with any typed numbering or bullets taken off: "1. ", "2) ", "- ", "* ", "• ". Only
+// with a space after, so a line that starts with a number keeps it ("0.5 inch", "-10°F", "2.5 m extension lead").
+export const lines = text => String(text || '').split('\n').map(l => l.replace(/^\s*(?:\d+[.)]|[-*•])(?=\s)\s*/, '').trim()).filter(Boolean);
