@@ -391,9 +391,15 @@ export class Ledger {
     const ready = colls.map(c => this.synced(c)).join();
     let changed = false, ok = false;
     try {
-      for (const coll of colls) {
-        const asked = Date.now(), waitingThen = this.waiting(coll), full = asked - (this.m(coll).fullAt || 0) > FULL_EVERY;
-        const j = await this.call({ op: 'list', app: this.app, coll, since: full ? 0 : this.m(coll).since });
+      // every collection is asked for at once, and the answers are taken in order, each with the time it was asked
+      // and what was waiting then
+      const asks = colls.map(coll => {
+        const asked = Date.now(), full = asked - (this.m(coll).fullAt || 0) > FULL_EVERY;
+        return { coll, asked, full, waitingThen: this.waiting(coll), answer: this.call({ op: 'list', app: this.app, coll, since: full ? 0 : this.m(coll).since }) };
+      });
+      for (const a of asks) a.answer.catch(() => {});   // one failing after an earlier one did is said once, below
+      for (const { coll, asked, full, waitingThen, answer } of asks) {
+        const j = await answer;
         // the phone moved to another ledger while this was asked: the old sheet's answer isn't the new one's copy,
         // and nothing is saved (not even that the new ledger has been heard from)
         if (this.cfg.url !== url || this.moved()) return false;

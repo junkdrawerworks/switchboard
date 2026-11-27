@@ -981,3 +981,36 @@ test('the day\'s whole list keeps a record that is waiting to go, or changed her
   assert.deepEqual(a.docs('totes').map(d => d.id).sort(), ['01', '02', '03']);
   assert.equal(sheets['mothball.totes'].data.length - 1, 3);
 });
+
+test('a sync asks for every collection at once: three lists Google holds 1 s each end in about 1 s', async () => {
+  const { net, open } = await world();
+  const a = open('larder');
+  await a.sync(['items', 'weighs', 'queue']);
+  let asked = 0;
+  net.hold = body => body.op === 'list' ? (asked++, new Promise(r => setTimeout(() => r(null), 1000))) : null;
+  const t0 = Date.now();
+  assert.equal(await a.sync(['items', 'weighs', 'queue']), true);
+  const took = Date.now() - t0;
+  assert.equal(asked, 3);
+  assert.ok(took < 1800, `the sync took ${took} ms: the lists went one after another`);
+});
+
+test('lists asked at once are taken in order: each keeps its own asked time and what was waiting then', async () => {
+  const { net, open, sheet } = await world();
+  const a = open('mothball'), b = open('mothball');
+  a.put('totes', { id: '01', name: 'Lights' }); a.put('builds', { id: 'train', name: 'Porch train' }); await a.flush();
+  await a.sync(['totes', 'builds']);
+  b.put('builds', { id: 'train', name: 'Porch train, v2' }); await b.flush();   // another device changes the card
+  const answers = [];
+  net.hold = body => body.op === 'list' ? new Promise(r => answers.push(() => r(null))) : null;
+  const syncing = a.sync(['totes', 'builds']);
+  for (let i = 0; i < 20 && answers.length < 2; i++) await tick();
+  assert.equal(answers.length, 2, 'both lists asked before either answered');
+  a.put('totes', { id: '01', name: 'Lights and timers' });          // changed here while the lists are on their way
+  answers[1](); await tick(); answers[0]();                          // the second answer is back first
+  assert.equal(await syncing, true);
+  assert.equal(a.doc('totes', '01').name, 'Lights and timers', 'a list asked before the change put the old copy back');
+  assert.equal(a.doc('builds', 'train').name, 'Porch train, v2');
+  net.hold = null; await a.flush();
+  assert.equal(sheet('mothball', 'totes')['01'].name, 'Lights and timers');
+});
