@@ -170,6 +170,10 @@ const failed = (message, kind) => Object.assign(new Error(message), { kind });
 // out of date reads the others' writes back before it shows or changes anything, so neither drops the other's.
 // <app>.touched says when this phone last changed each record, so a list Google read before that change can't undo it.
 const TOUCH_KEEP = 120000;
+// Once a day each collection is listed whole, and a record the sheet no longer has at all (a row cleared or deleted by
+// hand, an earlier version of the sheet restored) leaves this phone too: a list of what changed can't say that. When it
+// was last listed whole is kept with the copy (fullAt).
+const FULL_EVERY = 24 * 3600e3;
 
 export class Ledger {
   constructor(app, { demo = null, fetchImpl = null } = {}) {
@@ -388,8 +392,8 @@ export class Ledger {
     let changed = false, ok = false;
     try {
       for (const coll of colls) {
-        const asked = Date.now(), waitingThen = this.waiting(coll);
-        const j = await this.call({ op: 'list', app: this.app, coll, since: this.m(coll).since });
+        const asked = Date.now(), waitingThen = this.waiting(coll), full = asked - (this.m(coll).fullAt || 0) > FULL_EVERY;
+        const j = await this.call({ op: 'list', app: this.app, coll, since: full ? 0 : this.m(coll).since });
         // the phone moved to another ledger while this was asked: the old sheet's answer isn't the new one's copy,
         // and nothing is saved (not even that the new ledger has been heard from)
         if (this.cfg.url !== url || this.moved()) return false;
@@ -401,6 +405,11 @@ export class Ledger {
           if (waiting.has(d.id) || touched[coll + '/' + d.id] >= asked) continue;
           if (!changed && JSON.stringify(mm.docs[d.id]) !== JSON.stringify(d)) changed = true;
           mm.docs[d.id] = d;
+        }
+        if (full) {                                  // the whole list: what isn't in it has gone from the sheet
+          const have = new Set(j.docs.map(d => String(d.id)));
+          for (const id of Object.keys(mm.docs)) if (!have.has(id) && !waiting.has(id) && !(touched[coll + '/' + id] >= asked)) { delete mm.docs[id]; changed = true; }
+          mm.fullAt = asked;
         }
         mm.since = (j.time || Date.now()) - 5000; // overlap: a write in the same moment as the list is fetched again, never missed
         mm.listed = true;

@@ -941,3 +941,43 @@ test('a list answered from the old sheet after this tab missed the new address i
   await b.sync(['totes', 'builds']);
   assert.deepEqual(b.docs('totes').map(d => d.name), ['Porch lights']);
 });
+
+test('a row cleared or deleted by hand in the sheet leaves the phones too, by the next day', async t => {
+  const { open, sheets, g } = await world();
+  t.mock.timers.enable({ apis: ['Date'], now: Date.now() });
+  const a = open('frostbite');
+  a.put('items', { id: 'test', name: 'Test record' }); a.put('items', { id: 'stew', name: 'Beef stew' }); await a.flush();
+  await a.sync(['items']);
+  const s = sheets['frostbite.items'], r = s.data.findIndex(x => x[0] === 'test') + 1;
+  for (let c = 0; c < 4; c++) s.data[r - 1][c] = '';               // select the row, Delete: onEdit runs, the id is gone
+  g.onEdit({ range: s.getRange(r, 1, 1, 4) });
+  await a.sync(['items']);
+  assert.deepEqual(a.docs('items').map(d => d.name).sort(), ['Beef stew', 'Test record'], 'the same day: a list of changes can\'t say it went');
+  t.mock.timers.tick(25 * 3600e3);
+  await a.sync(['items']);
+  assert.deepEqual(a.docs('items').map(d => d.name), ['Beef stew']);
+});
+
+test('the day\'s whole list keeps a record that is waiting to go, or changed here after the list was asked for', async t => {
+  const { net, open, sheets, g } = await world();
+  t.mock.timers.enable({ apis: ['Date'], now: Date.now() });
+  const a = open('mothball');
+  a.put('totes', { id: '01', name: 'Lights' }); await a.flush(); await a.sync(['totes']);
+  t.mock.timers.tick(25 * 3600e3);
+  net.up = false;
+  a.put('totes', { id: '02', name: 'Wreaths' });                   // made with no signal: not on the sheet yet
+  await a.flush();
+  net.up = true;
+  let release;
+  net.hold = body => body.op === 'list' ? new Promise(r => { release = () => r(null); }) : null;
+  net.fail = body => body.op === 'batch';                          // the send fails, so 02 is still waiting at the list
+  const syncing = a.sync(['totes']);
+  for (let i = 0; i < 20 && !release; i++) await tick();
+  a.put('totes', { id: '03', name: 'Garlands' });                  // made while the whole list was on its way
+  release(); await syncing;
+  assert.deepEqual(a.docs('totes').map(d => d.id).sort(), ['01', '02', '03']);
+  net.fail = null; net.hold = null;
+  await a.flush(); await a.sync(['totes']);
+  assert.deepEqual(a.docs('totes').map(d => d.id).sort(), ['01', '02', '03']);
+  assert.equal(sheets['mothball.totes'].data.length - 1, 3);
+});
