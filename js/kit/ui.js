@@ -186,6 +186,24 @@ export function route(hash = location.hash) {
 }
 export const go = h => { if (location.hash !== h) location.hash = h; else window.dispatchEvent(new HashChangeEvent('hashchange')); };
 
+// Each app's one handler for a change of address: render(), then back to where the page was for a list (home, Build
+// cards, Edit, Reports), or the top for anything else. The browser's own restore raced the app's redraw and lost it
+// often (Back from a tote 40 rows down landed at the top), so it's off, and each address's place is kept here as the
+// page scrolls: only while that address is the one drawn, so the old page's place isn't overwritten as the new one
+// comes in.
+const LISTS = new Set(['home', 'builds', 'owner', 'reports']);
+export function onRoute(render) {
+  try { history.scrollRestoration = 'manual'; } catch {}
+  const places = {};
+  let drawn = location.hash;
+  addEventListener('scroll', () => { if (location.hash === drawn) places[drawn] = scrollY; }, { passive: true });
+  addEventListener('hashchange', () => {
+    render();
+    drawn = location.hash;
+    scrollTo(0, LISTS.has(route().view) ? places[drawn] || 0 : 0);
+  });
+}
+
 // The way out of an app's sample (?demo), beside "Sample data: nothing is kept" or in Placard's sample note.
 export const sampleLink = () => h('a', { class: 'sample-out', href: './' }, 'Leave the sample');
 
