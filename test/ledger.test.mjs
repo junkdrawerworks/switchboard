@@ -19,6 +19,7 @@ function fakeGoogle() {
   const sheets = {};
   const props = {};
   const mail = [];
+  mail.quota = 100;                                   // what MailApp says is left today; mail.refuse: sendEmail throws
   const cache = {};
   const locks = [];                                   // the lock and flush calls, in order
   const makeSheet = name => {
@@ -62,7 +63,8 @@ function fakeGoogle() {
     PropertiesService: { getScriptProperties: () => ({ getProperty: k => props[k] ?? null, setProperty: (k, v) => { props[k] = v; } }) },
     LockService: { getScriptLock: () => ({ waitLock() { locks.push('lock'); }, releaseLock() { locks.push('release'); } }) },
     CacheService: { getScriptCache: () => ({ get: k => cache[k] ?? null, put: (k, v) => { cache[k] = v; } }) },
-    MailApp: { sendEmail: (...a) => mail.push(a), getRemainingDailyQuota: () => 100 },
+    MailApp: { sendEmail: (...a) => { if (mail.refuse) throw new Error('Service invoked too many times for one day: email.'); mail.quota--; mail.push(a); },
+      getRemainingDailyQuota: () => mail.quota },
     Session: { getEffectiveUser: () => ({ getEmail: () => 'owner@example.com' }) },
     Utilities: { getUuid: () => `0000000${++uuid}-aaaa-bbbb-cccc-dddddddddddd`.slice(-36) },
     ContentService: { MimeType: { JSON: 'json' }, createTextOutput: t => ({ text: t, setMimeType() { return this; } }) },
@@ -151,6 +153,62 @@ test('only Placard\'s site is public, and public reports are kept, limited and e
   assert.match(post(g, { op: 'report', app: 'placard', coll: 'reports', doc: { text: 'one more' } }).error, /too many/);
   const reps = post(g, { key: props.KEY, op: 'list', app: 'placard', coll: 'reports', since: 0 }).docs;
   assert.equal(reps.length, 30);
+});
+
+test('only a real report counts towards the hour', () => {
+  const { g, props } = fakeGoogle();
+  g.setup();
+  // empty ones (a robot, or a form sent blank) are turned down without using up the hour
+  for (let i = 0; i < 40; i++) assert.equal(post(g, { op: 'report', app: 'placard', coll: 'reports', doc: { text: '', name: 'x' } }).error, 'empty report');
+  for (let i = 0; i < 5; i++) post(g, { op: 'report', app: 'placard', coll: 'reports', doc: { text: '  ', website: 'spam.example' } });
+  const r = post(g, { op: 'report', app: 'placard', coll: 'reports', doc: { text: 'Water under the tank' } });
+  assert.equal(r.ok, true, 'a real report after 40 empty ones: ' + r.error);
+  assert.equal(post(g, { key: props.KEY, op: 'list', app: 'placard', coll: 'reports', since: 0 }).docs.length, 1);
+});
+
+test('a report says whether the email went: at most 20 a day, never past Google\'s quota, and kept either way', () => {
+  const { g, props, mail } = fakeGoogle();
+  g.setup();
+  const RealDate = Date;
+  let shift = 0;                                      // the pretend Google's clock, moved on a day below
+  g.Date = class extends RealDate { constructor(...a) { super(...(a.length ? a : [RealDate.now() + shift])); } static now() { return RealDate.now() + shift; } };
+  const send = (text = 'Drip') => post(g, { op: 'report', app: 'placard', coll: 'reports', doc: { text } });
+  const kept = () => post(g, { key: props.KEY, op: 'list', app: 'placard', coll: 'reports', since: 0 }).docs.length;
+  assert.deepEqual(send(), { ok: true, emailed: true });
+  assert.equal(mail.length, 1);
+  // Google has nothing left today (other scripts used it): kept, not emailed, and nothing thrown
+  mail.quota = 0;
+  assert.deepEqual(send(), { ok: true, emailed: false });
+  assert.equal(mail.length, 1); assert.equal(kept(), 2);
+  // Google refuses the send itself
+  mail.quota = 100; mail.refuse = true;
+  assert.deepEqual(send(), { ok: true, emailed: false });
+  mail.refuse = false;
+  // the day's own cap: 20 tries at an email a day (the two above count), then kept without one
+  const answers = [];
+  for (let i = 0; i < 25; i++) { if (i === 10) shift += 3600 * 1000; answers.push(send('n' + i).emailed); } // over two hours: under 30 an hour
+  assert.equal(answers.filter(Boolean).length, 17, 'emails sent on the first day');
+  assert.deepEqual(answers.slice(17), Array(8).fill(false));
+  assert.equal(mail.length, 18); assert.equal(kept(), 28);
+  // the next day there are emails again
+  shift += 24 * 3600 * 1000;
+  assert.deepEqual(send('next day'), { ok: true, emailed: true });
+  assert.equal(mail.length, 19);
+});
+
+test('by GET the ledger answers only ping and pub; anything else says to use POST', () => {
+  const { g, props, sheets } = fakeGoogle();
+  g.setup();
+  const key = props.KEY;
+  post(g, { key, op: 'put', app: 'placard', coll: 'site', id: 'house', doc: { title: 'House manual' } });
+  assert.equal(get(g, {}).app, 'switchboard-ledger');
+  assert.equal(get(g, { op: 'ping', key }).ok, true);
+  assert.equal(get(g, { op: 'pub', app: 'placard', coll: 'site' }).docs[0].title, 'House manual');
+  for (const q of [{ op: 'put', app: 'larder', coll: 'items', id: 'x', doc: '{"name":"x"}', key }, { op: 'list', app: 'larder', coll: 'items', key },
+    { op: 'del', app: 'placard', coll: 'site', id: 'house', key }, { op: 'report', app: 'placard', coll: 'reports', text: 'x' }])
+    assert.deepEqual(get(g, q), { ok: false, error: 'use POST' }, q.op);
+  assert.equal(sheets['larder.items'], undefined, 'a GET wrote a record');
+  assert.equal(post(g, { key, op: 'get', app: 'placard', coll: 'site', id: 'house' }).doc._deleted, undefined);
 });
 
 test('the apps\' Ledger class syncs through it, keeps an outbox while offline, and sends it later', async () => {

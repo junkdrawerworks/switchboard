@@ -8,6 +8,9 @@
 const VERSION = '1.1';
 const PUBLIC_READ = ['placard.site'];                 // anyone may read these (the rental's tenant pages)
 const PUBLIC_REPORT = { 'placard.reports': 30 };      // anyone may add to these, at most this many an hour
+// Reports emailed in a day, at most. Gmail lets a script email 100 people a day (1,500 on Workspace), shared by every
+// script you run: developers.google.com/apps-script/guides/services/quotas. Past this a report is still kept.
+const MAIL_PER_DAY = 20;
 const HEAD = ['id', 'updated', 'deleted', 'json'];
 
 function setup() {
@@ -31,7 +34,13 @@ function setup() {
   Logger.log('Key: ' + key);
 }
 
-function doGet(e) { return out(handle(e.parameter || {})); }
+// By GET only the reads anyone may make: ping (the apps' check that the deployment answers) and pub. Everything else
+// comes by POST: a GET would put the key in the address, and every value in it arrives as text.
+function doGet(e) {
+  const q = e.parameter || {};
+  if (q.op && q.op !== 'ping' && q.op !== 'pub') return out({ ok: false, error: 'use POST' });
+  return out(handle(q));
+}
 function doPost(e) {
   let body;
   try { body = JSON.parse((e.postData && e.postData.contents) || '{}'); }
@@ -183,27 +192,43 @@ function onEdit(e) {
   s.getRange(top, 2, n, 1).setValues(stamps);
 }
 
-// A tenant's or a visitor's note from a public page: kept short, counted per hour, and emailed to you.
+// A tenant's or a visitor's note from a public page: kept short, counted per hour, and emailed to you. Only a real one
+// counts towards the hour (not an empty one, nor the hidden field only robots fill in). The answer says whether the
+// email went (emailed: false when today's share is used up or Google refused it), so the page can say "call".
 function report(name, doc) {
   const max = PUBLIC_REPORT[name];
   if (!max) return { ok: false, error: 'not public' };
   doc = doc || {};
   if (doc.website) return { ok: true }; // the hidden field only robots fill in
-  const cache = CacheService.getScriptCache();
-  const k = 'rep:' + name + ':' + new Date().getHours();
-  const n = Number(cache.get(k) || 0);
-  if (n >= max) return { ok: false, error: 'too many reports this hour; try later or call' };
-  cache.put(k, String(n + 1), 3600);
   const clean = {};
   ['system', 'systemName', 'kind', 'name', 'contact', 'text'].forEach(function (f) { if (doc[f]) clean[f] = String(doc[f]).slice(0, f === 'text' ? 2000 : 120); });
   if (!clean.text) return { ok: false, error: 'empty report' };
   clean.at = new Date().toISOString();
   clean.status = 'new';
-  locked(function () { return write({ op: 'add', app: name.split('.')[0], coll: name.split('.')[1], doc: clean }); });
+  const day = clean.at.slice(0, 10);
+  const props = PropertiesService.getScriptProperties();
+  let mailOk = false;
+  // Counted, kept and given today's email slot under the lock, so two at once can't both take the last one.
+  const saved = locked(function () {
+    const cache = CacheService.getScriptCache();
+    const k = 'rep:' + name + ':' + new Date().getHours();
+    const n = Number(cache.get(k) || 0);
+    if (n >= max) return false;
+    cache.put(k, String(n + 1), 3600);
+    write({ op: 'add', app: name.split('.')[0], coll: name.split('.')[1], doc: clean });
+    const was = String(props.getProperty('MAILED') || '').split(' '), mailed = was[0] === day ? Number(was[1]) || 0 : 0;
+    if (mailed < MAIL_PER_DAY) { mailOk = true; props.setProperty('MAILED', day + ' ' + (mailed + 1)); }
+    return true;
+  });
+  if (!saved) return { ok: false, error: 'too many reports this hour; try later or call' };
+  let emailed = false;
   try {
     const to = SpreadsheetApp.getActive().getSheetByName('About').getRange('B3').getValue();
-    if (to) MailApp.sendEmail(String(to), 'House manual: ' + (clean.kind || 'note') + ' — ' + (clean.systemName || clean.system || 'general'),
-      [clean.text, '', 'From: ' + (clean.name || '(no name)') + ' ' + (clean.contact || ''), 'System: ' + (clean.systemName || clean.system || '-'), 'At: ' + clean.at].join('\n'));
+    if (to && mailOk && MailApp.getRemainingDailyQuota() > 0) {
+      MailApp.sendEmail(String(to), 'House manual: ' + (clean.kind || 'note') + ' — ' + (clean.systemName || clean.system || 'general'),
+        [clean.text, '', 'From: ' + (clean.name || '(no name)') + ' ' + (clean.contact || ''), 'System: ' + (clean.systemName || clean.system || '-'), 'At: ' + clean.at].join('\n'));
+      emailed = true;
+    }
   } catch (e) { /* the report is saved even if the email fails */ }
-  return { ok: true };
+  return { ok: true, emailed: emailed };
 }
