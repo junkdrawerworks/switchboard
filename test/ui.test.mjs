@@ -87,7 +87,8 @@ class FakeNode extends EventTarget {
   remove() { if (this.parentNode) this.parentNode.childNodes = this.parentNode.childNodes.filter(n => n !== this); this.parentNode = null; }
   get textContent() { return this.childNodes.map(n => n.textContent).join(''); }
   set textContent(t) { this.childNodes = []; if (t !== '') this.append(new FakeText(String(t))); }
-  focus() { globalThis.document.activeElement = this; }
+  focus() { globalThis.document.activeElement = this; this.dispatchEvent(new Event('focusin')); }
+  contains(n) { for (; n; n = n.parentNode) if (n === this) return true; return false; }
   getBoundingClientRect() { return { width: this.width, height: 44 }; }
   get offsetWidth() { return this.width; }
   showModal() { this.open = true; const a = this.all().find(n => n.hasAttribute?.('autofocus')); (a || this.all().find(n => ['INPUT', 'SELECT', 'TEXTAREA', 'BUTTON'].includes(n.tagName)))?.focus(); }
@@ -101,6 +102,8 @@ function fakePage({ coarse = false } = {}) {
   globalThis.Node = FakeNode;
   globalThis.document = { body, activeElement: null, createElement: t => new FakeNode(t), createTextNode: t => new FakeText(t), querySelector: () => null };
   globalThis.matchMedia = q => ({ matches: q === '(pointer: coarse)' && coarse });
+  const win = new EventTarget();
+  globalThis.addEventListener = win.addEventListener.bind(win); globalThis.removeEventListener = win.removeEventListener.bind(win);
   const dialog = () => body.children.filter(n => n.tagName === 'DIALOG' && n.open).at(-1);
   const field = name => dialog().find(n => n.attrs.name === name);
   const submit = () => dialog().find(n => n.tagName === 'FORM').dispatchEvent(new Event('submit', { cancelable: true }));
@@ -161,4 +164,20 @@ test('a check may wait (a question in a sheet of its own), and a line alone or a
   p.button('Cancel').dispatchEvent(new Event('click'));
   answer(); await later();
   assert.equal(second, null);
+});
+
+test('a sheet is named by its title, which takes the focus on a touch screen so the keyboard waits for a tap on a field', async () => {
+  const { sheet } = await import('../js/kit/ui.js');
+  const fields = [{ name: 'name', label: 'Name' }, { name: 'note', label: 'Note' }];
+  for (const [coarse, autofocus, want] of [[true, false, 'title'], [true, true, 'name'], [false, false, 'name']]) {
+    const p = fakePage({ coarse });
+    sheet({ title: 'Edit Coffee beans', fields, autofocus });
+    const d = p.dialog(), h2 = d.find(n => n.tagName === 'H2');
+    assert.equal(h2.textContent, 'Edit Coffee beans');
+    assert.ok(h2.id && d.getAttribute('aria-labelledby') === h2.id, 'the dialog is not named by its title');
+    const on = document.activeElement;
+    assert.equal(on === h2 ? 'title' : on?.attrs?.name, want, `${coarse ? 'touch' : 'mouse'}${autofocus ? ', autofocus' : ''}: the focus went to ${on?.tagName}`);
+    if (want === 'title') assert.equal(h2.getAttribute('tabindex'), '-1');
+    p.button('Cancel').dispatchEvent(new Event('click'));
+  }
 });

@@ -122,7 +122,10 @@ button.row:active, a.row:active { transform: scale(.995); }
 .search { width: 100%; border: 2px solid var(--line); background: var(--panel); border-radius: 12px; padding: 12px 14px; margin: 0 0 12px; }
 
 /* forms in the sheet */
-dialog.sheet { border: 0; border-radius: 18px 18px 0 0; padding: 18px 16px calc(16px + env(safe-area-inset-bottom, 0)); width: 100%; max-width: 560px; margin: auto auto 0; background: var(--bg); color: var(--ink); max-height: 92vh; overflow: auto; }
+/* With the page resized above the on-screen keyboard (each index.html's interactive-widget=resizes-content), the sheet
+   fits what's left of the screen (dvh), and a field the focus moves to stops above the sticky Save bar. */
+dialog.sheet { border: 0; border-radius: 18px 18px 0 0; padding: 18px 16px calc(16px + env(safe-area-inset-bottom, 0)); width: 100%; max-width: 560px; margin: auto auto 0; background: var(--bg); color: var(--ink); max-height: 92vh; max-height: 92dvh; overflow: auto; scroll-padding-bottom: 84px; }
+dialog.sheet:has(.sheet-msg:not(:empty)) { scroll-padding-bottom: 120px; } /* the bar is taller with a refused Save's line */
 dialog.sheet::backdrop { background: rgba(0,0,0,.45); }
 dialog.sheet h2 { margin: 0 0 12px; overflow-wrap: anywhere; }
 ul.plain li { overflow-wrap: anywhere; }

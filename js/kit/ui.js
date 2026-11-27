@@ -39,9 +39,14 @@ export function toast(text, kind = '') {
 // its own). A line it returns (or { line, field }) is said above the buttons, and the sheet stays open with everything
 // typed, the focus on that field; { field } alone keeps it open with no line. Nothing, and it closes as before. So a
 // Save the app refuses (a number already taken, a weight it can't read, the ledger not heard from yet) loses nothing.
-export function sheet({ title, fields = [], body = null, ok = 'Save', danger = null, other = null, check = null }) {
+// On a touch screen the title takes the focus when it opens, so the on-screen keyboard waits for a tap on a field
+// instead of covering half the sheet at once; autofocus: true (where typing is the whole job) gives the first field
+// the focus anyway. With a mouse and keyboard the first field has it. The title names the sheet for a screen reader.
+let sheets = 0;
+export function sheet({ title, fields = [], body = null, ok = 'Save', danger = null, other = null, check = null, autofocus = false }) {
   return new Promise(resolve => {
-    const dlg = h('dialog', { class: 'sheet' });
+    const head = h('h2', { id: `sheet-${++sheets}-title` }, title);
+    const dlg = h('dialog', { class: 'sheet', 'aria-labelledby': head.id });
     const form = h('form', { method: 'dialog' });
     const inputs = {};
     for (const f of fields) {
@@ -82,13 +87,26 @@ export function sheet({ title, fields = [], body = null, ok = 'Save', danger = n
       }
       dlg.close(); resolve(out);
     });
+    // The field with the focus, in full between the title and the Save bar: when it takes the focus (Chrome shows only
+    // a textarea's caret line) and again when the page shrinks above the on-screen keyboard; one taller than the room
+    // shows its top.
+    const keep = () => {
+      const f = document.activeElement;
+      if (!dlg.open || !f || !dlg.contains(f) || !/^(INPUT|SELECT|TEXTAREA)$/.test(f.tagName)) return;
+      const r = f.getBoundingClientRect(), top = dlg.getBoundingClientRect().top + 8, bottom = bar.getBoundingClientRect().top - 8;
+      if (r.top < top || r.height > bottom - top) dlg.scrollTop -= top - r.top;
+      else if (r.bottom > bottom) dlg.scrollTop += r.bottom - bottom;
+    };
+    dlg.addEventListener('focusin', keep);
+    addEventListener('resize', keep);
     dlg.addEventListener('cancel', () => resolve(null));
-    dlg.addEventListener('close', () => setTimeout(() => dlg.remove(), 50));
-    dlg.append(h('h2', {}, title), form);
+    dlg.addEventListener('close', () => { removeEventListener('resize', keep); setTimeout(() => dlg.remove(), 50); });
+    const first = Object.values(inputs)[0];
+    if (matchMedia('(pointer: coarse)').matches && !(autofocus && first)) { head.setAttribute('tabindex', '-1'); head.setAttribute('autofocus', ''); }
+    else first?.setAttribute('autofocus', '');
+    dlg.append(head, form);
     document.body.append(dlg);
     dlg.showModal();
-    const first = Object.values(inputs)[0];
-    if (first && !matchMedia('(pointer: coarse)').matches) first.focus();
   });
 }
 

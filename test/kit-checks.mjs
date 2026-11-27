@@ -1,12 +1,29 @@
 // The house kit's own checks, run by test/e2e.mjs in every tag app (copied from the build folder's common/kit by
 // scaffold.py): the keyboard focus ring and the red toast can be seen, light and dark, a toast is announced and stays
-// long enough to read, and the sample's Leave the sample is a target a thumb can't miss.
+// long enough to read, the sample's Leave the sample is a target a thumb can't miss, and the page shrinks above the
+// on-screen keyboard. fieldsUnderBar is for the apps' own checks.
 // WCAG relative luminance and contrast ratio of two computed colours ('rgb(…)' or 'rgba(…)').
 const lum = c => {
   const [r, g, b] = c.match(/[\d.]+/g).slice(0, 3).map(Number).map(v => { v /= 255; return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; });
   return 0.2126 * r + 0.7152 * g + 0.0722 * b;
 };
 export const contrast = (a, b) => { const [x, y] = [lum(a), lum(b)].sort((p, q) => q - p); return (x + 0.05) / (y + 0.05); };
+
+// A sheet open on a short screen (the page resized above the on-screen keyboard): each field, focused in turn, sits
+// above the sticky Save bar and inside the sheet. Returns the fields that don't.
+export async function fieldsUnderBar(page) {
+  return page.evaluate(async () => {
+    const d = [...document.querySelectorAll('dialog[open]')].at(-1), bad = [];
+    for (const f of d.querySelectorAll('input, select, textarea')) {
+      if (f.getBoundingClientRect().width < 3 || f.closest('[aria-hidden="true"]')) continue;
+      f.focus();
+      await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+      const a = f.getBoundingClientRect(), bar = d.querySelector('.sheet-bar').getBoundingClientRect(), top = Math.max(0, d.getBoundingClientRect().top);
+      if (a.bottom > bar.top + 1 || a.top < top - 1) bad.push(`#${f.id} at ${Math.round(a.top)}-${Math.round(a.bottom)}, the bar at ${Math.round(bar.top)}`);
+    }
+    return bad;
+  });
+}
 
 export async function kitChecks({ browser, base, assert }) {
   for (const dark of [false, true]) {
@@ -48,6 +65,9 @@ export async function kitChecks({ browser, base, assert }) {
       const r = contrast(bad.color, bad.bg);
       assert.ok(r >= 4.5, `${scheme}: the red toast is ${r.toFixed(2)}:1 (${bad.color} on ${bad.bg}); it needs 4.5:1`);
       if (!dark) {
+        // the page shrinks above the on-screen keyboard (Chrome on Android otherwise lays it over the sheet's Save bar)
+        assert.match(await page.evaluate(() => document.querySelector('meta[name=viewport]')?.content || ''), /interactive-widget=resizes-content/,
+          'the viewport meta lets the keyboard cover the page');
         // a long message stays up long enough to read: 1.2 s and 60 ms a character, at least 2.6 s
         const text = 'Read the pack on Cellmate first (on your Wi-Fi), then try again.';   // 64 characters: 5 s
         await page.evaluate(async t => { const { toast } = await import('./js/kit/ui.js'); toast(t, 'bad'); }, text);
