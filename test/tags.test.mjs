@@ -25,7 +25,7 @@ test('slugs and ids', () => {
 });
 
 // 404.html's scripts (the one in its head, then the one at the end of its body) with a pretend page. overrides: lines
-// put into OVERRIDES, as Mark would.
+// put into OVERRIDES, as the owner would.
 function runResolver(pathname, overrides = '') {
   let html = readFileSync(new URL('../404.html', import.meta.url), 'utf8');
   if (overrides) html = html.replace('var OVERRIDES = {\n};', `var OVERRIDES = {\n${overrides}\n};`);
