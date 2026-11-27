@@ -76,6 +76,9 @@ test('the resolver page: overrides in any case, and a link cut short or mistyped
   assert.equal(runResolver('/h/w%C3%A4ter').here, 'tag.junkdrawer.works/h/wäter');
   assert.equal(runResolver('/h/water%20heater').here, 'tag.junkdrawer.works/h/water heater');
   assert.equal(runResolver('/h/%E0%A4%A').here, 'tag.junkdrawer.works/h/%E0%A4%A');
+  // a right-to-left override (or any direction mark) in the address can't turn the page's sentence round
+  assert.equal(runResolver('/h/%E2%80%AEab').here, 'tag.junkdrawer.works/h/ab');
+  assert.equal(runResolver('/h/a%E2%81%A6b%E2%81%A9%E2%80%8Fc%D8%9C').here, 'tag.junkdrawer.works/h/abc');
   // the page opened by its own name isn't a sticker that "points at …/404.html"
   const own = runResolver('/404.html');
   assert.deepEqual([own.went, own.title, own.points, own.shown], [undefined, 'Switchboard\'s page for tags', false, '']);

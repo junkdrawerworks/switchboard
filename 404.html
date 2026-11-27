@@ -10,7 +10,7 @@
   @media (prefers-color-scheme: dark) { body { background: #161714; color: #ECEAE2; } a { color: #F3C22F; } }
   main { max-width: 520px; margin: 0 auto; }
   h1 { font: 700 30px/1.1 "Arial Narrow", system-ui, sans-serif; text-transform: uppercase; margin: 0 0 10px; }
-  code { font-size: 15px; overflow-wrap: anywhere; }
+  code { font-size: 15px; overflow-wrap: anywhere; unicode-bidi: isolate; }
 </style>
 <script>
 // The resolver. A sticker holds https://tag.junkdrawer.works/<letter>/<id>; GitHub Pages answers every such address
@@ -57,13 +57,14 @@ var OVERRIDES = {
 <script>
 // A letter an app owns, with an id that isn't a whole one (/h/, /h/-bad, /h/water-heater/more): the link was cut short
 // when the sticker was written, or typed wrong. Say so, and open that app. The address is shown as typed (%C3%A4 as ä,
-// %20 as a space), or as it came if it doesn't decode; this page opened by its own name says only what it is.
+// %20 as a space), or as it came if it doesn't decode, without the invisible marks that would turn the sentence round
+// (right-to-left overrides and the like); this page opened by its own name says only what it is.
 (function () {
   var $ = function (id) { return document.getElementById(id); };
   if (location.pathname === '/404.html') { $('title').textContent = 'Switchboard\'s page for tags'; $('points').hidden = true; return; }
   var path = location.pathname;
   try { path = decodeURIComponent(path); } catch (e) { /* cut short mid-character: as it came */ }
-  $('here').textContent = location.host + path;
+  $('here').textContent = location.host + path.replace(/[\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069]/g, '');
   var l = (/^\/([a-z])(\/|$)/i.exec(location.pathname) || [])[1];
   l = l && l.toLowerCase();
   if (!l || !ROUTES[l] || window.__to) return; // __to: on its way to the app
