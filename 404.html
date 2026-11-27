@@ -14,8 +14,10 @@
 </style>
 <script>
 // The resolver. A sticker holds https://tag.junkdrawer.works/<letter>/<id>; GitHub Pages answers every such address
-// with this page, which sends the phone on to the app that owns the letter. Keep ROUTES in step with js/kit/tags.js
-// (test/e2e.mjs checks). To send one sticker somewhere else, add it to OVERRIDES: 'h/water-heater': 'https://…'.
+// with this page, which sends the phone on to the app that owns the letter. Keep ROUTES and NAMES in step with
+// js/kit/tags.js (test/tags.test.mjs checks). To send one sticker somewhere else, add it to OVERRIDES as
+// 'letter/id': 'https://…', for example 'h/water-heater': 'https://example.com/manual'. Keys are lowercased as the page
+// loads, like the address tapped, so 'H/Boiler' and 'h/boiler' are the same sticker.
 var ROUTES = {
   h: 'https://placard.junkdrawer.works/',
   t: 'https://mothball.junkdrawer.works/',
@@ -24,9 +26,13 @@ var ROUTES = {
   m: 'https://packrat.junkdrawer.works/',
   s: 'https://tag.junkdrawer.works/'
 };
+var NAMES = { h: 'Placard', t: 'Mothball', p: 'Larder', f: 'Frostbite', m: 'Packrat', s: 'Switchboard' };
 var OVERRIDES = {
 };
 (function () {
+  var lower = {};
+  for (var k in OVERRIDES) lower[k.toLowerCase()] = OVERRIDES[k];
+  OVERRIDES = lower;
   var m = /^\/([a-z])\/([a-z0-9][a-z0-9-]{0,39})\/?$/i.exec(location.pathname);
   if (!m) return;
   var key = m[1].toLowerCase() + '/' + m[2].toLowerCase();
@@ -43,10 +49,26 @@ var OVERRIDES = {
 </head>
 <body>
 <main>
-  <h1>This tag isn't set up</h1>
-  <p>The sticker you tapped points at <code id="here"></code>, which doesn't belong to any app yet.</p>
+  <h1 id="title">This tag isn't set up</h1>
+  <p>The sticker you tapped points at <code id="here"></code>, <span id="why">which doesn't belong to any app yet.</span></p>
+  <p id="app" hidden>It's one of <span id="name"></span>'s stickers. <a id="open" href="">Open <span id="name2"></span></a> to find its page.</p>
   <p><a href="https://tag.junkdrawer.works/">Switchboard</a> explains what these tags are.</p>
 </main>
-<script>document.getElementById('here').textContent = location.host + location.pathname;</script>
+<script>
+// A letter an app owns, with an id that isn't a whole one (/h/, /h/-bad, /h/water-heater/more): the link was cut short
+// when the sticker was written, or typed wrong. Say so, and open that app.
+(function () {
+  var $ = function (id) { return document.getElementById(id); };
+  $('here').textContent = location.host + location.pathname;
+  var l = (/^\/([a-z])(\/|$)/i.exec(location.pathname) || [])[1];
+  l = l && l.toLowerCase();
+  if (!l || !ROUTES[l] || window.__to) return; // __to: on its way to the app
+  $('title').textContent = 'This link is cut short or mistyped';
+  $('why').textContent = 'which isn\'t a whole tag address.';
+  $('name').textContent = $('name2').textContent = NAMES[l];
+  $('open').href = ROUTES[l];
+  $('app').hidden = false;
+})();
+</script>
 </body>
 </html>

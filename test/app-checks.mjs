@@ -65,7 +65,7 @@ export async function resolverChecks({ browser, assert }) {
     r = await tap('/x/foo');
     assert.match(r.text, /This tag isn't set up/, 'offline, /x/foo did not show the resolver page: ' + r.text);
     r = await tap('/h/');
-    assert.match(r.text, /This tag isn't set up/, 'offline, /h/ did not show the resolver page: ' + r.text.slice(0, 120));
+    assert.match(r.text, /This link is cut short or mistyped .* It's one of Placard's stickers\. Open Placard to find its page\./, 'offline, /h/ did not show the resolver page: ' + r.text.slice(0, 120));
     // one bar: the connection is up but nothing answers. The tap lands from the copy within a few seconds.
     srv.net = 'stalled';
     r = await tap('/h/smoke-co');
