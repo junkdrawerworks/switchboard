@@ -29,8 +29,9 @@ export function toast(text, kind = '') {
 }
 
 // A bottom sheet with a form. fields: [{ name, label, type, value, options, placeholder, hint, required }].
-// Resolves to the values (an object) or null if cancelled.
-export function sheet({ title, fields = [], body = null, ok = 'Save', danger = null }) {
+// Resolves to the values (an object) or null if cancelled; { __danger: true } for the red button (danger: 'Delete'),
+// { __other: true } for a plain one beside it (other: 'Edit').
+export function sheet({ title, fields = [], body = null, ok = 'Save', danger = null, other = null }) {
   return new Promise(resolve => {
     const dlg = h('dialog', { class: 'sheet' });
     const form = h('form', { method: 'dialog' });
@@ -50,6 +51,7 @@ export function sheet({ title, fields = [], body = null, ok = 'Save', danger = n
     if (body) form.append(body);
     const bar = h('div', { class: 'sheet-bar' },
       danger ? h('button', { type: 'button', class: 'btn danger ghost', onclick: () => { dlg.close(); resolve({ __danger: true }); } }, danger) : null,
+      other ? h('button', { type: 'button', class: 'btn ghost', onclick: () => { dlg.close(); resolve({ __other: true }); } }, other) : null,
       h('span', { class: 'grow' }),
       h('button', { type: 'button', class: 'btn ghost', onclick: () => { dlg.close(); resolve(null); } }, 'Cancel'),
       h('button', { type: 'submit', class: 'btn' }, ok));
