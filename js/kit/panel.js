@@ -6,8 +6,10 @@ import { nfcSupported, writeUrl, lockTag, explainNfc, cancelNfc } from './nfc.js
 // from the old: "Written. Tap it with the phone to check…" stays, a write in progress keeps its Stop button.
 const panels = new Map();
 
-// tagged and locked are the days (YYYY-MM-DD) the app saved when this sticker was written and locked.
-export function nfcPanel(url, { label = 'Write sticker', lock = false, onWritten = null, onLocked = null, note = '', tagged = null, locked = null } = {}) {
+// tagged and locked are the days (YYYY-MM-DD) the app saved when this sticker was written and locked. In the sample
+// (sample: true) Write still writes a real sticker, which is handy for trying the phone's reader, but Lock is off: it
+// can't be undone, and the sample's pages aren't the real ones.
+export function nfcPanel(url, { label = 'Write sticker', lock = false, onWritten = null, onLocked = null, note = '', tagged = null, locked = null, sample = false } = {}) {
   const st = panels.get(url) || { said: ['', ''], busy: '', spare: false };
   panels.set(url, st);
   const msg = st.msg = h('p', { class: 'msg', 'aria-live': 'polite' });
@@ -24,9 +26,10 @@ export function nfcPanel(url, { label = 'Write sticker', lock = false, onWritten
     return true;
   };
   btns.append(h('button', { type: 'button', class: 'btn', 'data-what': 'write', 'data-label': label, onclick: async () => {
-    if (await run('write', () => writeUrl(url), lock ? 'Written. Tap it with the phone to check, then lock it.' : 'Written. Tap it with the phone to check it opens this page.')) onWritten?.();
+    if (await run('write', () => writeUrl(url), lock && !sample ? 'Written. Tap it with the phone to check, then lock it.' : 'Written. Tap it with the phone to check it opens this page.')) onWritten?.();
   } }, label));
-  if (lock) btns.append(h('button', { type: 'button', class: 'btn ghost', 'data-what': 'lock', 'data-label': 'Lock sticker', onclick: async () => {
+  if (lock) btns.append(h('button', { type: 'button', class: 'btn ghost', 'data-what': 'lock', 'data-label': 'Lock sticker', disabled: sample, onclick: async () => {
+    if (sample) return;
     if (!st.busy && !await confirmSheet('Lock this sticker?', 'Locking is permanent: nobody can rewrite it, you included. Do it only after a tap opens the right page. The link can still be pointed elsewhere from Switchboard.', 'Lock it')) return;
     if (await run('lock', () => lockTag(), 'Locked. It will open this page for good.')) { st.spare = false; onLocked?.(); }
   } }, 'Lock sticker'));
@@ -47,6 +50,8 @@ export function nfcPanel(url, { label = 'Write sticker', lock = false, onWritten
     h('code', { class: 'url' }, url),
     state ? h('p', { class: 'msg state' }, state) : null,
     note ? h('p', { class: 'msg' }, note) : null,
+    sample ? h('p', { class: 'msg sample' }, 'This writes a real sticker with the sample\'s link.') : null,
+    sample && lock ? h('p', { class: 'msg sample' }, 'Locking is off in the sample: it can\'t be undone.') : null,
     locked ? (hidden ? more : spare) : btns,
     msg);
 }

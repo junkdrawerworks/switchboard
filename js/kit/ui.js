@@ -141,6 +141,9 @@ export function route(hash = location.hash) {
 }
 export const go = h => { if (location.hash !== h) location.hash = h; else window.dispatchEvent(new HashChangeEvent('hashchange')); };
 
+// The way out of an app's sample (?demo), beside "Sample data: nothing is kept" or in Placard's sample note.
+export const sampleLink = () => h('a', { class: 'sample-out', href: './' }, 'Leave the sample');
+
 export const buzz = p => { try { navigator.vibrate?.(p); } catch {} };
 
 // QR code as an SVG string (needs js/kit/qrcode.js loaded as a classic script).

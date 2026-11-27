@@ -52,7 +52,9 @@ small, .muted { color: var(--ink2); }
 .sync.pending::before { background: var(--warn); }
 .sync.offline::before, .sync.unset::before, .sync.badkey::before, .sync.broken::before, .sync.error::before { background: var(--bad); }
 .sync.demo::before { background: var(--tape-edge); }
-.sync:empty { display: none; } /* not filled yet (an app's Connect first screen): no lone dot */
+.sync:empty { display: none; }
+.sync + .sample-out { display: inline-block; margin: -6px 0 14px; font-size: 15px; color: var(--ink2); }
+.sync:has(+ .sample-out) { margin-bottom: 6px; } /* not filled yet (an app's Connect first screen): no lone dot */
 
 /* label-maker tape: the item's name */
 .tape-wrap { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; margin: 4px 0 14px; }
