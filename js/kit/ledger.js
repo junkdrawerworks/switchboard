@@ -175,9 +175,7 @@ export class Ledger {
   emit() { for (const fn of this.listeners) try { fn(this); } catch (e) { console.warn(e); } }
 
   // One request. A failure says what kind it was (e.kind): offline (no signal, or no answer in 45 s), badkey (the key
-  // changed), broken (an answer the page can't read: a deployment set to "Only myself" or deleted answers with a
-  // Google page, which a browser shows as a network error, so a second, plain request tells the two apart) or error
-  // (the ledger said no).
+  // changed), broken (a deployment set to "Only myself" or deleted: see unreadable()) or error (the ledger said no).
   async call(body) {
     if (this.demo) return this.demo.handle(clone(body));
     if (!this.connected) throw failed('not connected', 'unset');
@@ -186,7 +184,7 @@ export class Ledger {
     let r, j;
     try {
       try { r = await this.fetch(this.cfg.url, { method: 'POST', body: JSON.stringify({ ...body, key: this.cfg.key }), ...(ac ? { signal: ac.signal } : {}) }); }
-      catch (e) { throw e.name === 'AbortError' ? failed('no answer in 45 s', 'offline') : failed(e.message, await this.answers() ? 'broken' : 'offline'); }
+      catch (e) { throw e.name === 'AbortError' ? failed('no answer in 45 s', 'offline') : failed(e.message, await this.unreadable() ? 'broken' : 'offline'); }
       if (!r.ok) throw failed('ledger HTTP ' + r.status, 'broken');
       try { j = await r.json(); }
       catch (e) { throw e.name === 'SyntaxError' ? failed('the ledger answered with a page, not data', 'broken') : failed(e.message, 'offline'); }
@@ -194,12 +192,18 @@ export class Ledger {
     if (!j.ok) throw failed(j.error || 'ledger said no', /bad key/.test(j.error) ? 'badkey' : 'error');
     return j;
   }
-  // Does anything answer at the ledger's address? (An opaque answer counts: a Google sign-in or "not found" page.)
-  async answers() {
-    const ac = typeof AbortController === 'function' ? new AbortController() : null;
-    const t = ac ? later(() => ac.abort(), 10000) : null;
-    try { await this.fetch(this.cfg.url, { mode: 'no-cors', ...(ac ? { signal: ac.signal } : {}) }); return true; }
-    catch { return false; } finally { clearTimeout(t); }
+  // After a request failed the way no signal does: was it the connection, or a deployment that answers with a Google
+  // sign-in or "not found" page (which a browser reports the same way, since the page doesn't let the app read it)?
+  // A plain GET is the ledger's ping: if its answer reads, the deployment is fine and the connection dropped. If it
+  // doesn't, but an opaque (no-cors) request does get an answer, the deployment is what's wrong.
+  async unreadable() {
+    const get = async mode => {
+      const ac = typeof AbortController === 'function' ? new AbortController() : null;
+      const t = ac ? later(() => ac.abort(), 10000) : null;
+      try { const r = await this.fetch(this.cfg.url, { ...(mode ? { mode } : {}), ...(ac ? { signal: ac.signal } : {}) }); if (!mode) await r.json(); return true; }
+      catch { return false; } finally { clearTimeout(t); }
+    };
+    return !(await get('')) && await get('no-cors');
   }
   fail(e) { this.state = e.kind || 'offline'; this.lastError = e.message; }
   async ping() { return this.call({ op: 'ping' }); }

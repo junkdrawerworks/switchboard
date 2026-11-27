@@ -448,6 +448,13 @@ test('the status line says what the ledger is doing: no signal, a broken deploym
   const none = new Ledger('larder', { fetchImpl: async () => { throw new TypeError('Failed to fetch'); } });
   await none.sync(['items']);
   assert.equal(none.statusText(), 'Offline — 0 waiting');
+  // one bar of signal: a request's answer is lost on the way, though the deployment is fine (its ping reads)
+  const flaky = new Ledger('larder', { fetchImpl: async (u, o) => {
+    if (o.method === 'POST') throw new TypeError('Failed to fetch');
+    return o.mode === 'no-cors' ? { ok: false, status: 0, type: 'opaque' } : { ok: true, status: 200, json: async () => JSON.parse(g.doGet({ parameter: {} }).text) };
+  } });
+  await flaky.sync(['items']);
+  assert.equal(flaky.statusText(), 'Offline — 0 waiting', 'not "check the deployment"');
   // the ledger refuses a batch (a lock it couldn't get in 20 s, say): it keeps saying so after a list comes back
   const busy = new Ledger('larder', { fetchImpl: async (u, o) => {
     const b = JSON.parse(o.body);
@@ -457,7 +464,7 @@ test('the status line says what the ledger is doing: no signal, a broken deploym
   busy.put('items', { id: 'sage', name: 'Sage' });
   await busy.sync(['items']);
   assert.equal(busy.statusText(), 'The ledger said no (Lock timeout) — 1 waiting');
-  for (const l of [html, cors, none, busy]) l.stop();
+  for (const l of [html, cors, none, flaky, busy]) l.stop();
   void props;
 });
 
