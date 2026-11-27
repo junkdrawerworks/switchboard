@@ -190,7 +190,8 @@ test('the apps\' Ledger class syncs through it, keeps an outbox while offline, a
 // it, against the pretend Sheet. Marked todo until the fix lands; drop the todo with the fix.
 const opened = [];                                  // every Ledger a test opens is stopped after it (its retry timer)
 afterEach(() => { for (const l of opened.splice(0)) l.stop(); });
-const store = () => ({ s: {}, getItem(k) { return this.s[k] ?? null; }, setItem(k, v) { this.s[k] = String(v); }, removeItem(k) { delete this.s[k]; } });
+const store = () => ({ s: {}, getItem(k) { return this.s[k] ?? null; }, setItem(k, v) { this.s[k] = String(v); }, removeItem(k) { delete this.s[k]; },
+  get length() { return Object.keys(this.s).length; }, key(i) { return Object.keys(this.s)[i] ?? null; } });
 const URL_ = 'https://script.google.com/macros/s/X/exec';
 async function world() {
   globalThis.localStorage = store();
@@ -473,6 +474,61 @@ test('a sheet with two rows for one id shows the newer, and a row with broken js
   assert.equal(a.doc('items', 'top').name, 'Top basket');
   assert.deepEqual(a.docs('zones').map(z => z.name), ['Top basket']);
   assert.equal(a.doc('zones', 'bin'), null);
+});
+
+test('moving a phone to a different ledger shows only the new sheet, and says how many waiting changes were dropped', async () => {
+  globalThis.localStorage = store();
+  const { Ledger } = await import('../js/kit/ledger.js');
+  const A = fakeGoogle(), B = fakeGoogle();
+  A.g.setup(); B.g.setup();
+  post(B.g, { key: B.props.KEY, op: 'put', app: 'frostbite', coll: 'items', id: 'stew', doc: { name: 'Beef stew' } });   // the real sheet, older
+  post(A.g, { key: A.props.KEY, op: 'put', app: 'frostbite', coll: 'items', id: 'test', doc: { name: 'Test item' } });   // a trial sheet
+  let up = true;
+  const fetchImpl = async (url, o) => {
+    if (!up) throw new TypeError('Failed to fetch');
+    const G = url.includes('/A/') ? A : B;
+    const text = JSON.stringify(post(G.g, JSON.parse(o.body)));
+    return { ok: true, status: 200, json: async () => JSON.parse(text) };
+  };
+  const t = new Ledger('frostbite', { fetchImpl }); opened.push(t);
+  t.setConfig('https://script.google.com/macros/s/A/exec', A.props.KEY);
+  await t.sync(['items']);
+  assert.deepEqual(t.docs('items').map(d => d.name), ['Test item']);
+  up = false;
+  t.put('items', { id: 'peas', name: 'Peas' });
+  await t.flush();
+  up = true;
+  // a new key for the same address (setup run again on the same sheet): everything stays, the change goes
+  A.props.KEY = 'k2'.repeat(20);
+  assert.equal(t.setConfig('https://script.google.com/macros/s/A/exec', A.props.KEY), 0);
+  assert.equal(t.pending, 1);
+  up = false;
+  t.put('items', { id: 'corn', name: 'Corn' });
+  await t.flush();
+  up = true;
+  // the real sheet: the trial sheet's records and its two waiting changes go
+  assert.equal(t.setConfig('https://script.google.com/macros/s/B/exec', B.props.KEY), 2);
+  assert.equal(t.pending, 0);
+  await t.sync(['items']);
+  assert.deepEqual(t.docs('items').map(d => d.name), ['Beef stew']);
+  const reload = new Ledger('frostbite', { fetchImpl }); opened.push(reload);
+  assert.deepEqual(reload.docs('items').map(d => d.name), ['Beef stew'], 'what a reload finds');
+  assert.equal(reload.pending, 0);
+  // Forget clears it all
+  reload.forget();
+  assert.equal(reload.connected, false);
+  assert.deepEqual(Object.keys(localStorage.s).filter(k => /^frostbite\.(m\.|outbox|ledger|touched)/.test(k)), []);
+});
+
+test('connect links: a good one reads back, a cut-short or foreign one doesn\'t', async () => {
+  const { connectLink, readConnectLink } = await import('../js/kit/ledger.js');
+  const link = connectLink('https://larder.junkdrawer.works/', 'https://script.google.com/macros/s/AKfy/exec', 'k'.repeat(40));
+  assert.deepEqual(readConnectLink(new URL(link).hash), { url: 'https://script.google.com/macros/s/AKfy/exec', key: 'k'.repeat(40) });
+  assert.equal(readConnectLink(''), null);
+  assert.equal(readConnectLink('#cumin'), null);
+  assert.equal(readConnectLink(new URL(link).hash.slice(0, 30)), false, 'cut short');
+  assert.equal(readConnectLink('#connect=not base64!'), false);
+  assert.equal(readConnectLink('#connect=' + btoa(JSON.stringify({ u: 'https://example.com/exec', k: 'x' }))), false, 'not a Google address');
 });
 
 test('an older request from a reloaded page that lands late does not overwrite a newer save', { todo: 'Code.gs applies writes in arrival order; needs a per-device order check' }, async () => {

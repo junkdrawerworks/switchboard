@@ -1,22 +1,73 @@
 // The ledger: one Google Sheet (Switchboard's Apps Script) that every tag app reads and writes.
 // Each app keeps a mirror of its collections in localStorage, so it opens instantly and works with no signal;
 // writes go into an outbox and are sent in one batch when the ledger answers.
+let frozen = false; // set while the page reloads for a new connect link: nothing more is written from the old one
 const jget = k => { try { return JSON.parse(localStorage.getItem(k) || 'null'); } catch { return null; } };
 const sget = k => { try { return localStorage.getItem(k); } catch { return null; } };
-const jset = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} };
+const jset = (k, v) => { if (frozen) return; try { localStorage.setItem(k, JSON.stringify(v)); } catch {} };
+const drop = k => { if (frozen) return; try { localStorage.removeItem(k); } catch {} };
 const clone = o => JSON.parse(JSON.stringify(o));
 
-// A setup link from Switchboard: …/#connect=<base64url of {"u":url,"k":key}>. Saves it and tidies the address.
-export function takeConnectLink(app, loc = location) {
-  const m = /[#&]connect=([A-Za-z0-9_-]+)/.exec(loc.hash || '');
-  if (!m) return false;
+// A setup link from Switchboard: …/#connect=<base64url of {"u":url,"k":key}>. readConnectLink says what the address
+// holds: null (no link), false (a link that doesn't read, cut short say) or { url, key }.
+export function readConnectLink(hash) {
+  const m = /[#&]connect=([^&]*)/.exec(hash || '');
+  if (!m) return null;
   try {
-    const { u, k } = JSON.parse(atob(m[1].replace(/-/g, '+').replace(/_/g, '/')));
-    if (!/^https:\/\/script\.google(usercontent)?\.com\//.test(u) || !k) return false;
-    jset(app + '.ledger', { url: u, key: k });
-    history.replaceState(null, '', loc.pathname + loc.search);
-    return true;
-  } catch { return false; }
+    const { u, k } = JSON.parse(atob(decodeURIComponent(m[1]).replace(/-/g, '+').replace(/_/g, '/')));
+    if (typeof u === 'string' && /^https:\/\/script\.google(usercontent)?\.com\//.test(u) && typeof k === 'string' && k) return { url: u, key: k };
+  } catch {}
+  return false;
+}
+
+// Puts a ledger's address and key in place for an app. A different address is a different sheet: what this phone
+// kept from the old one (its copy of the records, and changes still waiting to go to it) is cleared, and the number of
+// changes dropped is returned. A new key for the same address (setup run again on the same sheet) keeps everything.
+export function adopt(app, url, key, colls = []) {
+  const old = jget(app + '.ledger') || {};
+  let dropped = 0;
+  if (old.url !== url) { dropped = (jget(app + '.outbox') || []).length; wipe(app, colls); }
+  jset(app + '.ledger', { url, key });
+  return dropped;
+}
+function wipe(app, colls = []) {
+  const keys = new Set([app + '.outbox', app + '.touched', ...colls.map(c => `${app}.m.${c}`)]);
+  try { for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); if (k?.startsWith(app + '.m.')) keys.add(k); } } catch {}
+  for (const k of keys) drop(k);
+  jset(app + '.rev', 'new ledger ' + Date.now());
+}
+
+// Saves a connect link found in the address, and tidies the address. True if it was a good one.
+export function takeConnectLink(app, loc = location) {
+  const c = readConnectLink(loc.hash);
+  if (c === null) return false;
+  history.replaceState(null, '', loc.pathname + loc.search);
+  if (c) adopt(app, c.url, c.key);
+  return !!c;
+}
+
+// Each app calls this before making its Ledger. A connect link in the address, when the page opens or later (pasted
+// into a tab already on the app), is saved; the address is tidied (the key isn't left in it), and say() (a toast)
+// tells the person. A link for a new ledger reloads the page, so everything starts from the new one.
+export function watchConnectLinks(app, say = () => {}) {
+  const NOTE = app + '.connect-note';
+  const take = running => {
+    const c = readConnectLink(location.hash);
+    if (c === null) return;
+    history.replaceState(null, '', location.pathname + location.search);
+    if (!c) { say('That connect link didn\'t work. Press Connect in Switchboard again.', 'bad'); return; }
+    const old = jget(app + '.ledger') || {};
+    if (old.url === c.url && old.key === c.key) { say('Connected to your ledger.'); return; }
+    const dropped = adopt(app, c.url, c.key);
+    const text = 'Connected to your ledger.' + (dropped ? ` ${dropped} change${dropped > 1 ? 's' : ''} waiting for the old one ${dropped > 1 ? 'were' : 'was'} dropped.` : '');
+    if (!running) { say(text); return; }
+    frozen = true;
+    try { sessionStorage.setItem(NOTE, text); } catch {}
+    location.reload();
+  };
+  try { const t = sessionStorage.getItem(NOTE); if (t) { sessionStorage.removeItem(NOTE); say(t); } } catch {}
+  take(false);
+  addEventListener('hashchange', () => take(true));
 }
 
 export function connectLink(base, url, key) {
@@ -92,12 +143,34 @@ export class Ledger {
     this.colls = null; this.onChange = null; this.stopped = false; this.unlisten = [];
   }
   get connected() { return !!(this.demo || (this.cfg.url && this.cfg.key)); }
+  // A new address clears what this phone kept from the old ledger (see adopt); returns the changes dropped.
   setConfig(url, key) {
-    this.cfg = { url: String(url).trim(), key: String(key).trim() };
-    jset(this.app + '.ledger', this.cfg);
+    const cfg = { url: String(url).trim(), key: String(key).trim() };
+    const dropped = adopt(this.app, cfg.url, cfg.key, [...Object.keys(this.mirror), ...(this.colls || [])]);
+    if (cfg.url !== this.cfg.url) this.restart();
+    this.cfg = cfg;
     this.state = 'idle'; this.emit();
+    return dropped;
   }
-  forget() { this.cfg = {}; try { localStorage.removeItem(this.app + '.ledger'); } catch {} this.state = 'unset'; this.emit(); }
+  forget() {
+    wipe(this.app, [...Object.keys(this.mirror), ...(this.colls || [])]); drop(this.app + '.ledger');
+    this.cfg = {}; this.restart(); this.state = 'unset'; this.emit();
+  }
+  // Forgets this page's copy of everything (after a new ledger, or another tab's), so it all comes from storage again.
+  restart() {
+    this.mirror = {}; this.outbox = this.demo ? [] : jget(this.app + '.outbox') || []; this.rev = sget(this.app + '.rev');
+    this.synced = false; this.syncFailed = false; this.tries = 0; this.lastError = '';
+  }
+  // Another tab connected this app to a ledger, or forgot it.
+  reconfig() {
+    const cfg = jget(this.app + '.ledger') || {};
+    if (cfg.url === this.cfg.url && cfg.key === this.cfg.key) return;
+    if (cfg.url !== this.cfg.url) this.restart();
+    this.cfg = cfg;
+    this.state = this.connected ? 'idle' : 'unset';
+    this.emit(); this.changed();
+    if (this.connected && this.colls) this.sync(this.colls);
+  }
   on(fn) { this.listeners.add(fn); return () => this.listeners.delete(fn); }
   emit() { for (const fn of this.listeners) try { fn(this); } catch (e) { console.warn(e); } }
 
@@ -276,7 +349,10 @@ export class Ledger {
     on(w, 'online', () => this.wake(true));
     on(w, 'pageshow', e => { if (e.persisted) this.wake(); });
     on(d, 'visibilitychange', () => { if (d.visibilityState === 'visible') this.wake(); else this.flush(); });
-    on(w, 'storage', e => { if ((e.key == null || e.key.startsWith(this.app + '.')) && this.fresh()) { this.emit(); this.changed(); } });
+    on(w, 'storage', e => {
+      if (e.key == null || e.key === this.app + '.ledger') this.reconfig();
+      if ((e.key == null || e.key.startsWith(this.app + '.')) && this.fresh()) { this.emit(); this.changed(); }
+    });
     if (this.connected) this.sync(colls);
     return this;
   }
