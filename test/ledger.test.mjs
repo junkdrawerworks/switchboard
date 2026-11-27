@@ -137,6 +137,36 @@ test('tote and pack numbers stay text: 01 is saved twice as one row and lists ba
   assert.equal(post(g, { key, op: 'list', app: 'placard', coll: 'reports', since: 0 }).docs[0].id, rep.id);
 });
 
+test('a tote saved as 01 by version 1.0 of the script (stored as the number 1) is the same record once 1.1 is pasted', async () => {
+  const { g, props, sheets, open } = await world();
+  const key = props.KEY;
+  // version 1.0 made tabs with no text format and wrote ids as they came, so the Sheet kept the tote number 01 as 1
+  const v10 = sheets['mothball.totes'] = g.SpreadsheetApp.getActive().insertSheet('mothball.totes');
+  v10.appendRow(['id', 'updated', 'deleted', 'json']);
+  v10.appendRow(['01', 1000, false, '{"name":"Lights"}']);
+  v10.appendRow(['02', 1000, false, '{"name":"Wreaths"}']);
+  assert.deepEqual(v10.data.slice(1).map(r => r[0]), [1, 2], 'the pretend Sheet should store them as numbers, as a real one does');
+  // a phone that synced then lists totes "1" and "2"
+  const phone = open('mothball');
+  await phone.sync(['totes']);
+  assert.deepEqual(phone.docs('totes').map(d => d.id).sort(), ['1', '2']);
+  // 1.1 pasted over it; tote 01 saved again: the same row, now the text 01, and phones drop the "1" they listed
+  phone.put('totes', { id: '01', name: 'Lights and the rink' });
+  await phone.sync(['totes']);
+  const live = v10.data.slice(1).filter(r => r[2] !== true);
+  assert.deepEqual(live.map(r => r[0]), ['01', 2], 'tote 01 is in the sheet twice (the 1.0 row and a new one)');
+  assert.equal(JSON.parse(live[0][3]).name, 'Lights and the rink');
+  assert.deepEqual(post(g, { key, op: 'list', app: 'mothball', coll: 'totes', since: 0 }).docs.filter(d => !d._deleted).map(d => d.id), ['01', '2']);
+  assert.deepEqual(phone.docs('totes').map(d => d.id).sort(), ['01', '2'], 'the phone keeps a tote "1" beside 01');
+  // tote 02 saved from a new laptop (which lists 01 and "2"): the same, and nothing left over
+  post(g, { key, op: 'put', app: 'mothball', coll: 'totes', id: '02', doc: { name: 'Wreaths' } });
+  assert.deepEqual(v10.data.slice(1).filter(r => r[2] !== true).map(r => r[0]), ['01', '02']);
+  // an id that's really "1" (not a v1.0 01) still matches its own row, and leaves 01 alone
+  post(g, { key, op: 'put', app: 'mothball', coll: 'totes', id: '1', doc: { name: 'One' } });
+  assert.equal(post(g, { key, op: 'get', app: 'mothball', coll: 'totes', id: '01' }).doc.name, 'Lights and the rink');
+  assert.equal(post(g, { key, op: 'get', app: 'mothball', coll: 'totes', id: '1' }).doc.name, 'One');
+});
+
 test('only Placard\'s site is public, and public reports are kept, limited and emailed', () => {
   const { g, props, mail } = fakeGoogle();
   g.setup();
