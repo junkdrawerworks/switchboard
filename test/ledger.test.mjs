@@ -625,12 +625,24 @@ test('an older request from a reloaded page that lands late does not overwrite a
 
 test('a duplicate row for one id: writes reach it, lists show one record, deletes stick', async () => {
   const { g, props, sheets } = await world();
+  // Two rows for one id made by hand (a row copied, then one copy edited), before anything writes to them: lists and
+  // gets answer with the one changed last, wherever it is, which is what Home Assistant and Dispatch read.
+  post(g, { key: props.KEY, op: 'put', app: 'larder', coll: 'queue', id: 'q0', doc: { text: 'Dill', synced: true } });
+  const q = sheets['larder.queue'].data;
+  q.push(['h1', 2000, false, '{"text":"Cumin","synced":true}'], ['h1', 1000, false, '{"text":"Cumin","synced":false}']);
+  q.push(['h2', 1000, false, '{"text":"Sage","synced":false}'], ['h2', 2000, false, '{"text":"Sage","synced":true}']);
+  const hand = post(g, { key: props.KEY, op: 'list', app: 'larder', coll: 'queue', since: 0, match: { synced: false } }).docs;
+  assert.deepEqual(hand.map(d => d.id), [], 'Home Assistant would add a hand-copied entry it already has');
+  for (const id of ['h1', 'h2']) assert.equal(post(g, { key: props.KEY, op: 'get', app: 'larder', coll: 'queue', id }).doc.synced, true);
+  assert.deepEqual(post(g, { key: props.KEY, op: 'list', app: 'larder', coll: 'queue', since: 0 }).docs.map(d => d.id), ['q0', 'h1', 'h2']);
   post(g, { key: props.KEY, op: 'put', app: 'larder', coll: 'queue', id: 'q1', doc: { text: 'Cumin', synced: false } });
-  sheets['larder.queue'].data.push([...sheets['larder.queue'].data[1]]);   // a row copied by hand, or two writes racing the lock
+  q.push([...q.find(r => r[0] === 'q1')]);                                 // a row copied by hand, or two writes racing the lock
   post(g, { key: props.KEY, op: 'put', app: 'larder', coll: 'queue', id: 'q1', doc: { text: 'Cumin', synced: true } });
   const waiting = post(g, { key: props.KEY, op: 'list', app: 'larder', coll: 'queue', since: 0, match: { synced: false } }).docs.filter(d => !d._deleted);
   assert.equal(waiting.length, 0, 'Home Assistant would add it to the list again every five minutes');
+  assert.deepEqual(q.filter(r => r[0] === 'q1').map(r => JSON.parse(r[3]).synced), [true, true], 'a write reached only one of the two rows');
   post(g, { key: props.KEY, op: 'del', app: 'larder', coll: 'queue', id: 'q1' });
+  assert.deepEqual(q.filter(r => r[0] === 'q1').map(r => r[2]), [true, true], 'a delete reached only one of the two rows');
   const all = post(g, { key: props.KEY, op: 'list', app: 'larder', coll: 'queue', since: 0 }).docs.filter(d => d.id === 'q1');
   assert.ok(all.every(d => d._deleted), 'a new phone must not see it come back');
 });
