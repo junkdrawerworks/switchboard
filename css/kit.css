@@ -51,7 +51,7 @@ small, .muted { color: var(--ink2); }
 .sync.synced::before, .sync.saved::before, .sync.idle::before { background: var(--ok); }
 .sync.pending::before { background: var(--warn); }
 .sync.offline::before, .sync.unset::before, .sync.badkey::before, .sync.broken::before, .sync.error::before { background: var(--bad); }
-.sync.demo::before { background: var(--tape-edge); }
+.sync.demo::before { background: var(--accent); } /* the app's own colour: --tape-edge all but vanished in dark mode */
 .sync:empty { display: none; } /* not filled yet (an app's Connect first screen): no lone dot */
 /* the sample's way out, under its status line: 44 px tall for a thumb, the words where they were */
 .sync + .sample-out { display: inline-block; padding: 11px 0; margin: -17px 0 3px; font-size: 15px; color: var(--ink2); }
@@ -95,7 +95,7 @@ button.row:active, a.row:active { transform: scale(.995); }
 /* buttons */
 .btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; border: 2px solid var(--accent); background: var(--accent); color: var(--accent-ink); border-radius: 10px; padding: 10px 16px; font-weight: 600; min-height: 44px; text-decoration: none; }
 .btn.ghost { background: transparent; color: var(--ink); border-color: var(--line); }
-.btn.danger { background: var(--bad); border-color: var(--bad); color: #fff; }
+.btn.danger { background: var(--bad); border-color: var(--bad); color: var(--panel); } /* as the red toast: 6.5:1 light, 6.6:1 dark */
 .btn.danger.ghost { background: transparent; color: var(--bad); border-color: var(--bad-soft); }
 .btn.big { width: 100%; min-height: 64px; font-size: 20px; border-radius: 14px; }
 .btn.wide { width: 100%; }

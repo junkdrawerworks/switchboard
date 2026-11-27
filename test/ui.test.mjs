@@ -199,3 +199,17 @@ test('a button held while the app asks the ledger says so, keeps its width, and 
   await assert.rejects(q);
   assert.deepEqual([btn.textContent, btn.disabled], ['New tote', false]);
 });
+
+test('a confirm that deletes, locks or clears for good has the red button; any other has the app\'s', async () => {
+  const p = fakePage();
+  const { confirmSheet } = await import('../js/kit/ui.js');
+  const yes = confirmSheet('Delete tote 01?', 'Its list and notes go.', 'Delete', { danger: true });
+  assert.equal(p.button('Delete').className, 'btn danger');
+  assert.equal(p.button('Delete').getAttribute('type'), 'submit');
+  p.submit();
+  assert.equal(await yes, true);
+  const plain = confirmSheet('A new jar?', 'Sets the bought date to today.', 'New jar');
+  assert.equal(p.button('New jar').className, 'btn');
+  p.button('Cancel').dispatchEvent(new Event('click'));
+  assert.equal(await plain, false);
+});

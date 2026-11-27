@@ -64,6 +64,11 @@ export async function kitChecks({ browser, base, assert }) {
       });
       const r = contrast(bad.color, bad.bg);
       assert.ok(r >= 4.5, `${scheme}: the red toast is ${r.toFixed(2)}:1 (${bad.color} on ${bad.bg}); it needs 4.5:1`);
+      // a confirm's red button (Delete, Lock it, Clear it): its words against its red
+      const red = await page.evaluate(() => { const b = document.createElement('button'); b.className = 'btn danger'; b.textContent = 'Delete'; document.body.append(b);
+        const s = getComputedStyle(b), out = { color: s.color, bg: s.backgroundColor }; b.remove(); return out; });
+      const rr = contrast(red.color, red.bg);
+      assert.ok(rr >= 4.5, `${scheme}: the red Delete button is ${rr.toFixed(2)}:1 (${red.color} on ${red.bg}); it needs 4.5:1`);
       if (!dark) {
         // the page shrinks above the on-screen keyboard (Chrome on Android otherwise lays it over the sheet's Save bar)
         assert.match(await page.evaluate(() => document.querySelector('meta[name=viewport]')?.content || ''), /interactive-widget=resizes-content/,
@@ -84,6 +89,9 @@ export async function kitChecks({ browser, base, assert }) {
         await page.waitForSelector('a.sample-out');
         const box = await page.locator('a.sample-out').boundingBox();
         assert.ok(box.height >= 44, `${scheme}: Leave the sample is ${Math.round(box.width)} x ${Math.round(box.height)} px; it needs 44 px of height`);
+        // the sample's status dot can be seen: 3:1 against the page (it was the tape's edge colour, 1.00:1 in dark mode)
+        const dot = await page.evaluate(() => { const s = document.querySelector('.sync.demo'); return s && [getComputedStyle(s, '::before').backgroundColor, getComputedStyle(document.body).backgroundColor]; });
+        if (dot) { const r = contrast(...dot); assert.ok(r >= 3, `${scheme}: the sample's status dot is ${r.toFixed(2)}:1 against the page (${dot[0]} on ${dot[1]})`); }
       }
     } finally { await ctx.close(); }
   }

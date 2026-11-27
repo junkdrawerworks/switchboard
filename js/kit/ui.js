@@ -43,7 +43,8 @@ export function toast(text, kind = '') {
 // instead of covering half the sheet at once; autofocus: true (where typing is the whole job) gives the first field
 // the focus anyway. With a mouse and keyboard the first field has it. The title names the sheet for a screen reader.
 let sheets = 0;
-export function sheet({ title, fields = [], body = null, ok = 'Save', danger = null, other = null, check = null, autofocus = false }) {
+// okDanger: the submit button is the red one (a confirm that deletes, locks or clears for good).
+export function sheet({ title, fields = [], body = null, ok = 'Save', danger = null, other = null, check = null, autofocus = false, okDanger = false }) {
   return new Promise(resolve => {
     const head = h('h2', { id: `sheet-${++sheets}-title` }, title);
     const dlg = h('dialog', { class: 'sheet', 'aria-labelledby': head.id });
@@ -68,7 +69,7 @@ export function sheet({ title, fields = [], body = null, ok = 'Save', danger = n
       other ? h('button', { type: 'button', class: 'btn ghost', onclick: () => { dlg.close(); resolve({ __other: true }); } }, other) : null,
       h('span', { class: 'grow' }),
       h('button', { type: 'button', class: 'btn ghost', onclick: () => { dlg.close(); resolve(null); } }, 'Cancel'),
-      h('button', { type: 'submit', class: 'btn' }, ok));
+      h('button', { type: 'submit', class: okDanger ? 'btn danger' : 'btn' }, ok));
     form.append(bar);
     let checking = false;
     form.addEventListener('submit', async e => {
@@ -122,8 +123,10 @@ export async function held(btn, p, busy = 'Checking…') {
   }
 }
 
-export function confirmSheet(title, text, ok = 'OK') {
-  return sheet({ title, body: h('p', {}, text), ok }).then(v => !!v && !v.__danger);
+// A yes or no. { danger: true } for one that can't be undone (Delete, Lock it, Clear it): its button is red, not the
+// app's colour in Save's place.
+export function confirmSheet(title, text, ok = 'OK', { danger = false } = {}) {
+  return sheet({ title, body: h('p', {}, text), ok, okDanger: danger }).then(v => !!v && !v.__danger);
 }
 
 // ---- dates (YYYY-MM-DD strings, local time)

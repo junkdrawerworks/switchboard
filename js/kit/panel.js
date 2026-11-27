@@ -30,7 +30,7 @@ export function nfcPanel(url, { label = 'Write sticker', lock = false, onWritten
   } }, label));
   if (lock) btns.append(h('button', { type: 'button', class: 'btn ghost', 'data-what': 'lock', 'data-label': 'Lock sticker', disabled: sample, onclick: async () => {
     if (sample) return;
-    if (!st.busy && !await confirmSheet('Lock this sticker?', 'Locking is permanent: nobody can rewrite it, you included. Do it only after a tap opens the right page. The link can still be pointed elsewhere from Switchboard.', 'Lock it')) return;
+    if (!st.busy && !await confirmSheet('Lock this sticker?', 'Locking is permanent: nobody can rewrite it, you included. Do it only after a tap opens the right page. The link can still be pointed elsewhere from Switchboard.', 'Lock it', { danger: true })) return;
     if (await run('lock', () => lockTag(), 'Locked. It will open this page for good.')) { st.spare = false; onLocked?.(); }
   } }, 'Lock sticker'));
   labels();
