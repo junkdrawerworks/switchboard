@@ -22,7 +22,7 @@ checkBtn.addEventListener('click', async () => {
   if (reading) { idle(); cancelNfc(); msg.textContent = 'Stopped.'; msg.className = 'msg'; return; }
   const me = reading = ++presses;
   checkBtn.textContent = 'Stop';
-  msg.textContent = 'Listening. Hold a tag to the top of the phone.'; msg.className = 'msg wait'; out.hidden = true;
+  msg.textContent = 'Listening. Hold the sticker flat against the back of the phone, near the top.'; msg.className = 'msg wait'; out.hidden = true;
   try {
     const { url, serial } = await readOnce();
     if (reading !== me) return;

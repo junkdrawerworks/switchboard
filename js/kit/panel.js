@@ -17,7 +17,7 @@ export function nfcPanel(url, { label = 'Write sticker', lock = false, onWritten
   const run = async (what, fn, done) => {
     if (st.busy) { cancelNfc(); return false; }
     st.busy = what; labels();
-    say('Hold the sticker to the top of the phone, flat, and keep it still.', 'wait');
+    say('Hold the sticker flat against the back of the phone, near the top, and keep it still.', 'wait');
     try { await fn(); buzz(80); say(done, 'ok'); }
     catch (e) { buzz([40, 60, 40]); say(await explainNfc(e, what), e.name === 'AbortError' ? '' : 'bad'); return false; }
     finally { st.busy = ''; labels(); }

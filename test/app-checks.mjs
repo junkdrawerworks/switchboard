@@ -30,6 +30,7 @@ async function checkATag({ page, base, assert }) {
     await page.click('#check-btn');
     await listening();
     assert.equal(await text('#check-btn'), 'Stop', 'the button stops the read while it listens');
+    assert.equal(await text('#check-msg'), 'Listening. Hold the sticker flat against the back of the phone, near the top.');
     assert.equal(await page.evaluate(u => window.__nfc.tap(u), url), true, 'nothing was listening for the sticker');
     await page.waitForSelector('#check-out:not([hidden])');
     assert.equal(await text('#check-btn'), 'Check a tag');

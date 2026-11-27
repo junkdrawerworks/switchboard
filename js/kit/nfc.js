@@ -56,7 +56,8 @@ export async function readOnce({ timeout = 30000 } = {}) {
   } finally { if (active === ctl) active = null; }
 }
 
-// What went wrong, in one plain line.
+// What went wrong, in one plain line. The NFC switch is where Google's Pixel Help puts it
+// (support.google.com/pixelphone/answer/7475639); that page doesn't say where the reader is: on a Pixel it's on the back.
 export async function explainNfc(e, what = 'write') {
   let perm = '';
   try { perm = (await navigator.permissions.query({ name: 'nfc' })).state; } catch {}
@@ -66,8 +67,8 @@ export async function explainNfc(e, what = 'write') {
   if (e.name === 'NotAllowedError' && /activation|gesture/i.test(e.message)) return 'Chrome wants a fresh tap. Press the button again.';
   if (e.name === 'NotAllowedError' && /permission/i.test(e.message)) return 'NFC isn\'t allowed for this site yet. Press the button and allow it when Chrome asks.';
   if (e.name === 'NotAllowedError' && what === 'write') return 'That sticker is locked or already used. Use a blank one.';
-  if (e.name === 'NotReadableError') return 'NFC looks switched off. Turn it on in the phone\'s settings (Connected devices → NFC).';
+  if (e.name === 'NotReadableError') return 'NFC looks switched off. Turn it on in the phone\'s settings (Connected devices → Connection preferences → NFC).';
   if (e.name === 'NotSupportedError' && /NFC is not supported|unavailable/i.test(e.message)) return 'This phone or browser can\'t use NFC. Use Chrome on the Android phone.';
   if (e.name === 'NotSupportedError') return what === 'lock' ? 'This sticker can\'t be locked, or this Chrome can\'t lock it.' : 'That tag isn\'t one Chrome can write. NTAG213/215/216 stickers work.';
-  return `Couldn't ${what} the sticker (${e.message || e.name}). Hold it flat against the top of the phone and keep it still.`;
+  return `Couldn't ${what} the sticker (${e.message || e.name}). Hold it flat against the back of the phone, near the top, and keep it still.`;
 }

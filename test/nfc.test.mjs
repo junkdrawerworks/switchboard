@@ -19,7 +19,7 @@ const tap = (records, serial = '04:a2:19:7c') => {
   r.onreading?.({ serialNumber: serial, message: { records } });
 };
 const tick = () => new Promise(r => setTimeout(r, 0));
-const { readOnce, cancelNfc } = await import('../js/kit/nfc.js');
+const { readOnce, cancelNfc, explainNfc } = await import('../js/kit/nfc.js');
 beforeEach(() => { cancelNfc(); readers = []; });
 
 test('a sticker held to the phone is read, and the reader stops listening', async () => {
@@ -62,4 +62,10 @@ test('stopped while the reader is still starting: stopped, not left waiting', as
   const t0 = Date.now();
   await assert.rejects(p, { name: 'AbortError' });
   assert.ok(Date.now() - t0 < 1000, 'waited for the timeout');
+});
+
+test("what went wrong says where a Pixel's NFC switch and reader are", async () => {
+  assert.equal(await explainNfc({ name: 'NotReadableError', message: '' }, 'read'),
+    'NFC looks switched off. Turn it on in the phone\'s settings (Connected devices → Connection preferences → NFC).');
+  assert.match(await explainNfc({ name: 'NetworkError', message: 'lost' }, 'write'), /^Couldn't write the sticker \(lost\)\. Hold it flat against the back of the phone, near the top, and keep it still\.$/);
 });
