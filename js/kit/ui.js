@@ -113,8 +113,10 @@ export function stampText(ms, now = new Date()) {
 }
 
 // ---- the address: #<id> is an item, #/<view> is a screen
+// An address that can't be decoded (cut short or mistyped, like #%E0%A4%A) is the home page, not a blank one.
 export function route(hash = location.hash) {
-  const s = decodeURIComponent(hash.replace(/^#/, ''));
+  let s;
+  try { s = decodeURIComponent(hash.replace(/^#/, '')); } catch { return { view: 'home' }; }
   if (!s) return { view: 'home' };
   if (s.startsWith('/')) { const [view, ...rest] = s.slice(1).split('/'); return { view: view || 'home', arg: rest.join('/') }; }
   return { view: 'item', id: s.toLowerCase() };
