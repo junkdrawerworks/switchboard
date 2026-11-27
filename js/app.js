@@ -1,7 +1,7 @@
 import { $, h, mount, toast, buzz } from './kit/ui.js';
 import { APPS, parseTag, resolve, tagUrl } from './kit/tags.js';
 import { Ledger, connectLink } from './kit/ledger.js';
-import { readOnce, explainNfc, nfcSupported } from './kit/nfc.js';
+import { readOnce, explainNfc, nfcSupported, cancelNfc } from './kit/nfc.js';
 import { nfcPanel } from './kit/panel.js';
 
 const ledger = new Ledger('switchboard');
@@ -11,13 +11,22 @@ const blurb = { h: 'The rental house manual', t: 'Seasonal totes', p: 'Consumabl
 if (location.hash === '#test') { $('#test-ok').hidden = false; history.replaceState(null, '', location.pathname); }
 
 // ---- check a tag
-$('#check-btn').addEventListener('click', async () => {
+// Each press is one read. While it listens the button says Stop, and a press stops it. A read that Stop (or a newer
+// press) ended says nothing more, so its "Stopped." can't land on top of the next press's "Listening" line.
+let reading = 0, presses = 0;
+const checkBtn = $('#check-btn');
+const idle = () => { reading = 0; checkBtn.textContent = 'Check a tag'; };
+checkBtn.addEventListener('click', async () => {
   const msg = $('#check-msg'), out = $('#check-out');
   if (!nfcSupported()) { msg.textContent = 'Reading tags here needs Chrome on an Android phone.'; msg.className = 'msg bad'; return; }
+  if (reading) { idle(); cancelNfc(); msg.textContent = 'Stopped.'; msg.className = 'msg'; return; }
+  const me = reading = ++presses;
+  checkBtn.textContent = 'Stop';
   msg.textContent = 'Listening. Hold a tag to the top of the phone.'; msg.className = 'msg wait'; out.hidden = true;
   try {
     const { url, serial } = await readOnce();
-    buzz(50);
+    if (reading !== me) return;
+    idle(); buzz(50);
     const t = parseTag(url);
     msg.textContent = ''; out.hidden = false;
     if (!url) mount(out, h('p', {}, 'That sticker is blank.'), h('p', { class: 'muted mono' }, serial));
@@ -29,7 +38,13 @@ $('#check-btn').addEventListener('click', async () => {
         to ? h('p', {}, 'Goes to ', h('code', {}, to)) : h('p', {}, 'No app owns this letter.'),
         to ? h('div', { class: 'btns' }, h('a', { class: 'btn', href: to }, 'Open')) : null);
     }
-  } catch (e) { msg.textContent = await explainNfc(e, 'read'); msg.className = 'msg ' + (e.name === 'AbortError' ? '' : 'bad'); }
+  } catch (e) {
+    if (reading !== me) return;
+    idle();
+    const text = await explainNfc(e, 'read');
+    if (reading) return; // pressed again while that was worked out
+    msg.textContent = text; msg.className = 'msg ' + (e.name === 'AbortError' ? '' : 'bad');
+  }
 });
 
 // ---- ledger

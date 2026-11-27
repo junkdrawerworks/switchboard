@@ -28,26 +28,32 @@ export async function lockTag() {
   } finally { if (active === ctl) active = null; }
 }
 
-// Waits for one sticker and returns { serial, url } (url is the first link record, or '').
+// Waits for one sticker and returns { serial, url } (url is the first link record, or ''). It settles once: a sticker
+// read, no sticker in time (TimeoutError), or stopped by cancelNfc() or a newer NFC job (AbortError). Aborting the
+// scan after a read fires the abort listener at once, so the read must settle first.
 export async function readOnce({ timeout = 30000 } = {}) {
   const ctl = job();
-  const r = new NDEFReader();
-  await r.scan({ signal: ctl.signal });
-  return new Promise((resolve, reject) => {
-    const t = setTimeout(() => { ctl.abort(); reject(Object.assign(new Error('No tag within the time'), { name: 'TimeoutError' })); }, timeout);
-    ctl.signal.addEventListener('abort', () => { clearTimeout(t); reject(Object.assign(new Error('stopped'), { name: 'AbortError' })); });
-    r.onreading = ev => {
-      clearTimeout(t);
-      let url = '';
-      for (const rec of ev.message.records) {
-        if (rec.recordType === 'url' || rec.recordType === 'absolute-url') { url = new TextDecoder().decode(rec.data); break; }
-      }
-      ctl.abort();
-      if (active === ctl) active = null;
-      resolve({ serial: ev.serialNumber || '', url });
-    };
-    r.onreadingerror = () => {}; // a blank or unreadable tag: keep listening
-  });
+  const stopped = () => Object.assign(new Error('stopped'), { name: 'AbortError' });
+  try {
+    const r = new NDEFReader();
+    await r.scan({ signal: ctl.signal });
+    if (ctl.signal.aborted) throw stopped(); // stopped while the scan was starting: the abort event has been and gone
+    return await new Promise((resolve, reject) => {
+      let done = false;
+      const settle = (fn, v) => { if (done) return; done = true; clearTimeout(t); fn(v); };
+      const t = setTimeout(() => { settle(reject, Object.assign(new Error('No tag within the time'), { name: 'TimeoutError' })); ctl.abort(); }, timeout);
+      ctl.signal.addEventListener('abort', () => settle(reject, stopped()));
+      r.onreading = ev => {
+        let url = '';
+        for (const rec of ev.message.records) {
+          if (rec.recordType === 'url' || rec.recordType === 'absolute-url') { url = new TextDecoder().decode(rec.data); break; }
+        }
+        settle(resolve, { serial: ev.serialNumber || '', url });
+        ctl.abort(); // stop listening
+      };
+      r.onreadingerror = () => {}; // a blank or unreadable tag: keep listening
+    });
+  } finally { if (active === ctl) active = null; }
 }
 
 // What went wrong, in one plain line.
