@@ -70,3 +70,95 @@ test('a toast stays long enough to read: 1.2 s and 60 ms a character, at least 2
   assert.equal(toastMs('Saved.'), 2600);
   assert.equal(toastMs('Read the pack on Cellmate first (on your Wi-Fi), then try again.'), 1200 + 60 * 64);
 });
+
+// ---- the sheet and buttons, on a small stand-in for the page: elements with attributes, children, events and focus
+class FakeNode extends EventTarget {
+  constructor(tag) {
+    super(); this.tagName = tag.toUpperCase(); this.childNodes = []; this.attrs = {}; this.style = {}; this.dataset = {};
+    this.className = ''; this.value = ''; this.parentNode = null; this.open = false; this.disabled = false; this.width = 120;
+  }
+  get children() { return this.childNodes.filter(n => !(n instanceof FakeText)); }
+  setAttribute(k, v) { this.attrs[k] = String(v); if (k === 'id') this.id = String(v); }
+  getAttribute(k) { return this.attrs[k] ?? null; }
+  hasAttribute(k) { return k in this.attrs; }
+  removeAttribute(k) { delete this.attrs[k]; }
+  append(...kids) { for (const k of kids) { const n = typeof k === 'string' ? new FakeText(k) : k; n.parentNode = this; this.childNodes.push(n); } }
+  replaceChildren(...kids) { this.childNodes = []; this.append(...kids); }
+  remove() { if (this.parentNode) this.parentNode.childNodes = this.parentNode.childNodes.filter(n => n !== this); this.parentNode = null; }
+  get textContent() { return this.childNodes.map(n => n.textContent).join(''); }
+  set textContent(t) { this.childNodes = []; if (t !== '') this.append(new FakeText(String(t))); }
+  focus() { globalThis.document.activeElement = this; }
+  getBoundingClientRect() { return { width: this.width, height: 44 }; }
+  get offsetWidth() { return this.width; }
+  showModal() { this.open = true; const a = this.all().find(n => n.hasAttribute?.('autofocus')); (a || this.all().find(n => ['INPUT', 'SELECT', 'TEXTAREA', 'BUTTON'].includes(n.tagName)))?.focus(); }
+  close() { if (!this.open) return; this.open = false; this.dispatchEvent(new Event('close')); }
+  all() { return this.childNodes.flatMap(n => n instanceof FakeText ? [] : [n, ...n.all()]); }
+  find(pred) { return this.all().find(pred); }
+}
+class FakeText extends FakeNode { constructor(t) { super('#text'); this.data = t; } get textContent() { return this.data; } all() { return []; } }
+function fakePage({ coarse = false } = {}) {
+  const body = new FakeNode('body');
+  globalThis.Node = FakeNode;
+  globalThis.document = { body, activeElement: null, createElement: t => new FakeNode(t), createTextNode: t => new FakeText(t), querySelector: () => null };
+  globalThis.matchMedia = q => ({ matches: q === '(pointer: coarse)' && coarse });
+  const dialog = () => body.children.filter(n => n.tagName === 'DIALOG' && n.open).at(-1);
+  const field = name => dialog().find(n => n.attrs.name === name);
+  const submit = () => dialog().find(n => n.tagName === 'FORM').dispatchEvent(new Event('submit', { cancelable: true }));
+  const button = text => dialog().find(n => n.tagName === 'BUTTON' && n.textContent === text);
+  return { body, dialog, field, submit, button };
+}
+const later = (ms = 0) => new Promise(r => setTimeout(r, ms));
+
+test('a Save the app refuses keeps the sheet open with what was typed, says why, and focuses the field it names', async () => {
+  const p = fakePage();
+  const { sheet } = await import('../js/kit/ui.js');
+  const taken = new Set(['01', '02']), checked = [];
+  const done = sheet({ title: 'Tote 01', fields: [{ name: 'id', label: 'Number', value: '01' }, { name: 'items', label: 'Contents', type: 'textarea' }],
+    check: v => { checked.push(v.id); return taken.has(v.id) && v.id !== '01' ? { field: 'id', line: `There's already a tote ${v.id}.` } : ''; } });
+  let result = 'open';
+  done.then(v => { result = v; });
+  p.field('items').value = 'Three foam pumpkins\nTimer plug';
+  p.field('id').value = '02';
+  p.field('items').focus();
+  p.submit(); await later();
+  assert.equal(result, 'open', 'the sheet closed on a refused Save');
+  assert.equal(p.dialog().open, true);
+  const msg = p.dialog().find(n => /sheet-msg/.test(n.className));
+  assert.equal(msg.textContent, "There's already a tote 02.");
+  assert.equal(msg.getAttribute('aria-live'), 'polite');
+  assert.equal(document.activeElement, p.field('id'), 'the focus is not on the number');
+  assert.equal(p.field('items').value, 'Three foam pumpkins\nTimer plug', 'what was typed went');
+  p.field('id').value = '03';
+  p.submit(); await later();
+  assert.deepEqual(result, { id: '03', items: 'Three foam pumpkins\nTimer plug' });
+  assert.deepEqual(checked, ['02', '03']);
+});
+
+test('a check may wait (a question in a sheet of its own), and a line alone or a field alone keeps the sheet open', async () => {
+  const p = fakePage();
+  const { sheet } = await import('../js/kit/ui.js');
+  let answer, said = ['Still loading from the ledger. Try again in a moment.', { field: 'net' }, ''];
+  const done = sheet({ title: 'New spice jar', fields: [{ name: 'name', label: 'Name' }, { name: 'net', label: 'Net weight' }],
+    check: () => new Promise(r => { answer = () => r(said.shift()); }) });
+  let result = 'open';
+  done.then(v => { result = v; });
+  p.field('name').value = 'Sumac';
+  p.submit(); await later();
+  p.submit(); await later();                                         // a second press while it checks does nothing more
+  answer(); await later();
+  assert.equal(result, 'open');
+  assert.equal(p.dialog().find(n => /sheet-msg/.test(n.className)).textContent, 'Still loading from the ledger. Try again in a moment.');
+  p.submit(); await later(); answer(); await later();
+  assert.equal(result, 'open', '{ field } alone closed the sheet');
+  assert.equal(document.activeElement, p.field('net'));
+  assert.equal(p.dialog().find(n => /sheet-msg/.test(n.className)).textContent, '', 'the old line stayed');
+  p.submit(); await later(); answer(); await later();
+  assert.deepEqual(result, { name: 'Sumac', net: '' });
+  // Cancel while a check waits: the sheet answers null, and the check's answer changes nothing after
+  const again = sheet({ title: 'New spice jar', fields: [{ name: 'name', label: 'Name' }], check: () => new Promise(r => { answer = () => r(''); }) });
+  let second = 'open'; again.then(v => { second = v; });
+  p.submit(); await later();
+  p.button('Cancel').dispatchEvent(new Event('click'));
+  answer(); await later();
+  assert.equal(second, null);
+});

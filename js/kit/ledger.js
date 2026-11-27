@@ -112,6 +112,7 @@ const later = (fn, ms) => { const t = setTimeout(fn, ms); t?.unref?.(); return t
 export const CANT_REACH = 'Can\'t reach the ledger yet. This opens as soon as it can.';
 export const STILL_LOADING = 'Still loading from the ledger. Try again in a moment.';
 export const WRONG_KEY = 'The ledger turned down this phone\'s key. Press Connect beside this app in Switchboard again.';
+export const TOO_LONG = 'Too long to save: over 45,000 characters. Shorten it.';
 
 // The ledger's own rules for a record (Code.gs write()): an id of 1-60 letters, digits and _ . : -, and at most 45,000
 // characters of JSON without the id. put() and del() refuse anything else before it's queued, so one record the ledger
@@ -122,6 +123,11 @@ export function refusal(doc) {
   if (!doc || !ID_RULE.test(String(doc.id ?? ''))) return 'bad id';
   const { id, _updated, _deleted, ...rest } = doc;
   return JSON.stringify(rest).length > MAX_JSON ? 'too big' : '';
+}
+// The line a sheet's check says for a record put() would refuse ('' when it can be saved).
+export function refusedLine(doc) {
+  const why = refusal(doc);
+  return why === 'too big' ? TOO_LONG : why ? `"${doc?.id ?? ''}" can't be an id: letters, digits and dashes only.` : '';
 }
 // An import over what's here: the file fills in what's empty here and adds what's new, but never blanks or replaces a
 // value here, so what was typed on the phone stays. A list of lines (a tote's contents, its build cards) gains the

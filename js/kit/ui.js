@@ -35,7 +35,11 @@ export function toast(text, kind = '') {
 // A bottom sheet with a form. fields: [{ name, label, type, value, options, placeholder, hint, required }].
 // Resolves to the values (an object) or null if cancelled; { __danger: true } for the red button (danger: 'Delete'),
 // { __other: true } for a plain one beside it (other: 'Edit').
-export function sheet({ title, fields = [], body = null, ok = 'Save', danger = null, other = null }) {
+// check(values), when given, runs on Save before the sheet closes, and may wait (Larder asks a question in a sheet of
+// its own). A line it returns (or { line, field }) is said above the buttons, and the sheet stays open with everything
+// typed, the focus on that field; { field } alone keeps it open with no line. Nothing, and it closes as before. So a
+// Save the app refuses (a number already taken, a weight it can't read, the ledger not heard from yet) loses nothing.
+export function sheet({ title, fields = [], body = null, ok = 'Save', danger = null, other = null, check = null }) {
   return new Promise(resolve => {
     const dlg = h('dialog', { class: 'sheet' });
     const form = h('form', { method: 'dialog' });
@@ -53,17 +57,29 @@ export function sheet({ title, fields = [], body = null, ok = 'Save', danger = n
       form.append(h('label', { class: 'field', for: id }, h('span', {}, f.label), input, f.hint ? h('small', {}, f.hint) : null));
     }
     if (body) form.append(body);
-    const bar = h('div', { class: 'sheet-bar' },
+    const said = h('p', { class: 'msg bad sheet-msg', 'aria-live': 'polite' });
+    const bar = h('div', { class: 'sheet-bar' }, said,
       danger ? h('button', { type: 'button', class: 'btn danger ghost', onclick: () => { dlg.close(); resolve({ __danger: true }); } }, danger) : null,
       other ? h('button', { type: 'button', class: 'btn ghost', onclick: () => { dlg.close(); resolve({ __other: true }); } }, other) : null,
       h('span', { class: 'grow' }),
       h('button', { type: 'button', class: 'btn ghost', onclick: () => { dlg.close(); resolve(null); } }, 'Cancel'),
       h('button', { type: 'submit', class: 'btn' }, ok));
     form.append(bar);
-    form.addEventListener('submit', e => {
+    let checking = false;
+    form.addEventListener('submit', async e => {
       e.preventDefault();
+      if (checking) return;
       const out = {};
       for (const [k, el] of Object.entries(inputs)) out[k] = el.value.trim();
+      if (check) {
+        checking = true;
+        let r;
+        try { r = await check(out); } finally { checking = false; }
+        if (!dlg.open) return;                       // cancelled while it was checking
+        const { line = '', field = null } = typeof r === 'string' ? { line: r } : r || {};
+        said.textContent = line;
+        if (line || field) { inputs[field]?.focus(); return; }
+      }
       dlg.close(); resolve(out);
     });
     dlg.addEventListener('cancel', () => resolve(null));
