@@ -466,10 +466,10 @@ export class Ledger {
   statusText() {
     if (this.demo) return 'Sample data: nothing is kept';
     this.fresh();
-    const n = this.outbox.length;
+    const n = this.outbox.length, waits = n ? ` — ${n} waiting` : '';   // "Offline" alone when nothing is waiting
     return ({ unset: 'Not connected to the ledger', idle: 'Connected', pending: `Saving ${n}…`, saved: 'Saved', synced: 'Up to date',
-      offline: `Offline — ${n} waiting`, badkey: 'Wrong key — connect again from Switchboard',
-      broken: 'The ledger isn\'t answering — check the deployment', error: `The ledger said no (${this.lastError}) — ${n} waiting` })[this.state] || '';
+      offline: `Offline${waits}`, badkey: 'Wrong key — connect again from Switchboard',
+      broken: 'The ledger isn\'t answering — check the deployment', error: `The ledger said no (${this.lastError})${waits}` })[this.state] || '';
   }
 }
 
