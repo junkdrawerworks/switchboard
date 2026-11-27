@@ -50,16 +50,20 @@ var OVERRIDES = {
 <body>
 <main>
   <h1 id="title">This tag isn't set up</h1>
-  <p>The sticker you tapped points at <code id="here"></code>, <span id="why">which doesn't belong to any app yet.</span></p>
+  <p id="points">The sticker you tapped points at <code id="here"></code>, <span id="why">which doesn't belong to any app yet.</span></p>
   <p id="app" hidden>It's one of <span id="name"></span>'s stickers. <a id="open" href="">Open <span id="name2"></span></a> to find its page.</p>
   <p><a href="https://tag.junkdrawer.works/">Switchboard</a> explains what these tags are.</p>
 </main>
 <script>
 // A letter an app owns, with an id that isn't a whole one (/h/, /h/-bad, /h/water-heater/more): the link was cut short
-// when the sticker was written, or typed wrong. Say so, and open that app.
+// when the sticker was written, or typed wrong. Say so, and open that app. The address is shown as typed (%C3%A4 as ä,
+// %20 as a space), or as it came if it doesn't decode; this page opened by its own name says only what it is.
 (function () {
   var $ = function (id) { return document.getElementById(id); };
-  $('here').textContent = location.host + location.pathname;
+  if (location.pathname === '/404.html') { $('title').textContent = 'Switchboard\'s page for tags'; $('points').hidden = true; return; }
+  var path = location.pathname;
+  try { path = decodeURIComponent(path); } catch (e) { /* cut short mid-character: as it came */ }
+  $('here').textContent = location.host + path;
   var l = (/^\/([a-z])(\/|$)/i.exec(location.pathname) || [])[1];
   l = l && l.toLowerCase();
   if (!l || !ROUTES[l] || window.__to) return; // __to: on its way to the app

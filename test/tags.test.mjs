@@ -36,7 +36,7 @@ function runResolver(pathname, overrides = '') {
   vm.createContext(ctx);
   ctx.window = ctx; // the page's globals are window's, as in a browser
   for (const [, script] of html.matchAll(/<script>([\s\S]*?)<\/script>/g)) vm.runInContext(script, ctx);
-  return { went: ctx.went, routes: ctx.ROUTES, names: ctx.NAMES, registered: ctx.registered,
+  return { went: ctx.went, routes: ctx.ROUTES, names: ctx.NAMES, registered: ctx.registered, here: el('here').textContent, points: !el('points').hidden,
     title: els.title.textContent, shown: !els.app.hidden ? `${el('why').textContent} ${el('name').textContent} ${el('open').href}` : '' };
 }
 
@@ -72,6 +72,14 @@ test('the resolver page: overrides in any case, and a link cut short or mistyped
     assert.equal(r.shown, 'which isn\'t a whole tag address. Placard https://placard.junkdrawer.works/', path);
   }
   assert.equal(runResolver('/m/').shown, 'which isn\'t a whole tag address. Packrat https://packrat.junkdrawer.works/');
+  // the address as typed: an encoded letter or space reads as itself, and one that doesn't decode as it came
+  assert.equal(runResolver('/h/w%C3%A4ter').here, 'tag.junkdrawer.works/h/wäter');
+  assert.equal(runResolver('/h/water%20heater').here, 'tag.junkdrawer.works/h/water heater');
+  assert.equal(runResolver('/h/%E0%A4%A').here, 'tag.junkdrawer.works/h/%E0%A4%A');
+  // the page opened by its own name isn't a sticker that "points at …/404.html"
+  const own = runResolver('/404.html');
+  assert.deepEqual([own.went, own.title, own.points, own.shown], [undefined, 'Switchboard\'s page for tags', false, '']);
+  assert.equal(runResolver('/x/foo').points, true);
   // a letter no app owns, or no letter at all: as before
   for (const path of ['/x/foo', '/hh/x', '/']) {
     const r = runResolver(path);
