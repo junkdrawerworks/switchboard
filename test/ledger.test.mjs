@@ -861,3 +861,21 @@ test('an add sent twice with the same id (a retry) keeps one row and does not un
   assert.equal(sheets['larder.queue'].data.length - 1, 1);
   assert.equal(post(g, { key: props.KEY, op: 'list', app: 'larder', coll: 'queue', since: 0, match: { synced: false } }).docs.length, 0);
 });
+
+// ---- Round 3's ledger lab (full treatment): each is the shortest sequence its fuzzer or walks found.
+test('a delete made again while an earlier send of the same delete is still on its way goes too', async () => {
+  const { net, open, sheet, g } = await world();
+  const a = open('mothball'), b = open('mothball');               // the installed app and a tab a sticker tap opened
+  a.put('totes', { id: '01', name: 'Lights' }); await a.flush();
+  let answer;
+  net.hold = body => { if (body.op !== 'batch' || answer) return null; const text = JSON.stringify(post(g, body)); return new Promise(r => { answer = () => r(text); }); };
+  a.del('totes', '01');
+  const first = a.flush();                                         // Google applies the delete; its answer is slow
+  await tick(); await tick();
+  b.put('totes', { id: '01', name: 'Lights and wreaths' }); await b.flush();   // made again in the other tab, and sent
+  b.del('totes', '01');                                            // and deleted again: the same op as the first
+  answer(); await first;                                           // the first answer takes away the second delete
+  await b.flush(); await a.flush();
+  assert.equal(b.pending, 0);
+  assert.equal(sheet('mothball', 'totes')['01']._deleted, true, 'the second delete never reached the sheet');
+});

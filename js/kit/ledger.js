@@ -324,7 +324,10 @@ export class Ledger {
     mm.docs[id] = { id, _deleted: true, _updated: Date.now() }; this.touch(coll, id); this.save(coll);
     this.queue({ op: 'del', app: this.app, coll, id });
   }
+  // Each write carries its own stamp (q), which the ledger ignores: a send answered late takes out of the outbox only
+  // the writes it carried, never a later one that reads the same (a tote deleted, made again and deleted again).
   queue(op) {
+    op = { ...op, q: Date.now().toString(36) + Math.random().toString(36).slice(2, 7) };
     this.fresh();                                    // another tab's waiting writes stay in
     this.outbox = this.outbox.filter(o => !(o.coll === op.coll && o.id === op.id)); // only the latest write per doc
     this.outbox.push(op);
@@ -349,7 +352,7 @@ export class Ledger {
     let ok = false;
     try {
       await this.call({ op: 'batch', ops });
-      this.fresh();                                  // what went, by content: a newer write of the same record stays
+      this.fresh();                                  // what went, by content and stamp: a newer write of the same record stays
       const sent = new Set(ops.map(o => JSON.stringify(o)));
       this.outbox = this.outbox.filter(o => !sent.has(JSON.stringify(o)));
       if (!this.demo) { jset(this.app + '.outbox', this.outbox); this.stamp(); }
