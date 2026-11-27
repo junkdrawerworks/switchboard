@@ -8,7 +8,7 @@
 // fingerprint of every file in SHELL: change any of them and test/e2e.mjs fails until FILES is changed to match (it
 // says what to), which changes this file, so every copy is made whole again at once.
 const CACHE = 'switchboard-v1'; // bump the number when the file list changes
-const FILES = 'fe4cc484'; // test/e2e.mjs checks this
+const FILES = 'b69cf681'; // test/e2e.mjs checks this
 const SHELL = [
   './', 'index.html', 'icon.svg', 'manifest.webmanifest',
   '404.html', 'css/app.css', 'css/kit.css', 'js/app.js',
@@ -44,13 +44,25 @@ const fromCopy = new Set();
 const likeCopy = new Set();
 const remember = (list, id) => { list.add(id); if (list.size > 50) list.delete(list.values().next().value); }; // the oldest, long gone
 
-// Switchboard only: a tag address (/h/water-heater) is answered by 404.html, the resolver. Offline, answer it from
-// the copy, so a tap still reaches the app (which then opens from its own copy).
+// Switchboard only: a sticker's address (/h/water-heater), or any other address here that isn't one of Switchboard's
+// own pages (/h/ from a sticker written short), is answered by 404.html, the resolver, which works at any depth. The
+// network comes first, so a change to OVERRIDES arrives. With no signal the copy's 404.html answers at once; on a
+// connection that's up but not answering (one bar in a basement) it answers after RESOLVE. Either way the tap still
+// reaches the app, which then opens from its own copy.
+const RESOLVE = 3000; // ms
+const OWN = new Set(SHELL.map(u => new URL(u, location).pathname)); // '/', '/index.html', '/404.html', the files
 self.addEventListener('fetch', e => {
   const url = new URL(e.request.url);
-  if (e.request.mode !== 'navigate' || url.origin !== location.origin || !/^\/[a-z]\/[a-z0-9][a-z0-9-]*\/?$/i.test(url.pathname)) return;
+  if (e.request.mode !== 'navigate' || url.origin !== location.origin || OWN.has(url.pathname)) return;
   e.stopImmediatePropagation();
-  e.respondWith(fetch(e.request).catch(() => caches.match('404.html')));
+  e.respondWith(new Promise(resolve => {
+    let answered = false;
+    const answer = res => { if (res && !answered) { answered = true; resolve(res); } };
+    const copy = () => caches.match('404.html');
+    const slow = setTimeout(() => copy().then(answer), RESOLVE);
+    fresh(e.request).then(res => { clearTimeout(slow); answer(res); },
+      () => { clearTimeout(slow); copy().then(res => answer(res || Response.error())); });
+  }));
 });
 
 self.addEventListener('fetch', e => {

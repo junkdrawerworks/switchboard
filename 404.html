@@ -31,7 +31,13 @@ var OVERRIDES = {
   if (!m) return;
   var key = m[1].toLowerCase() + '/' + m[2].toLowerCase();
   var to = OVERRIDES[key] || (ROUTES[m[1].toLowerCase()] ? ROUTES[m[1].toLowerCase()] + '#' + m[2].toLowerCase() : null);
-  if (to) { window.__to = to; location.replace(to); }
+  if (to) {
+    window.__to = to;
+    // Switchboard's offline copy, for a phone that only ever taps stickers (a tenant's): the next tap with no signal
+    // or one bar still gets here. Not waited on: the worker installs in the background and the tap goes on at once.
+    if (navigator.serviceWorker) navigator.serviceWorker.register(location.origin + '/sw.js').catch(function () {});
+    location.replace(to);
+  }
 })();
 </script>
 </head>

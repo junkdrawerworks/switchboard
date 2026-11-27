@@ -27,9 +27,10 @@ test('slugs and ids', () => {
 function runResolver(pathname) {
   const html = readFileSync(new URL('../404.html', import.meta.url), 'utf8');
   const script = html.match(/<script>([\s\S]*?)<\/script>/)[1];
-  const ctx = { location: { pathname, replace(u) { ctx.went = u; } }, window: {} };
+  const ctx = { location: { origin: 'https://tag.junkdrawer.works', pathname, replace(u) { ctx.went = u; } }, window: {},
+    navigator: { serviceWorker: { register(u) { ctx.registered = u; return Promise.resolve(); } } } };
   vm.createContext(ctx); vm.runInContext(script, ctx);
-  return { went: ctx.went, routes: ctx.ROUTES };
+  return { went: ctx.went, routes: ctx.ROUTES, registered: ctx.registered };
 }
 
 test('the resolver page sends each letter to the same app as tags.js', () => {
@@ -41,4 +42,6 @@ test('the resolver page sends each letter to the same app as tags.js', () => {
   assert.equal(runResolver('/s/test').went, 'https://tag.junkdrawer.works/#test');
   assert.equal(runResolver('/z/whatever').went, undefined);
   assert.equal(runResolver('/h/').went, undefined);
+  // a tap leaves Switchboard's offline copy behind (the worker at the site's root), so the next one works with no signal
+  assert.equal(runResolver('/h/water-heater').registered, 'https://tag.junkdrawer.works/sw.js');
 });

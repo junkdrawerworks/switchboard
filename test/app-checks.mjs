@@ -1,4 +1,88 @@
 // Switchboard's own checks, run by test/e2e.mjs on a phone-sized page.
+import { createServer } from 'node:http';
+import { readFile } from 'node:fs/promises';
+import { join, dirname, extname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const root = join(dirname(fileURLToPath(import.meta.url)), '..');
+const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.png': 'image/png', '.woff2': 'font/woff2', '.webmanifest': 'application/manifest+json' };
+
+// This repo served the way GitHub Pages serves it: a file it has, or 404.html with status 404 for any other address
+// (every sticker's). `net` is the connection: 'up', 'down' (every connection dropped) or 'stalled' (one bar in a
+// basement: each request is taken and held). `patch` rewrites 404.html as served (a change to OVERRIDES).
+function pagesServer() {
+  const ctl = { net: 'up', held: [], patch: null };
+  const serve = async (req, res) => {
+    let path = new URL(req.url, 'http://x').pathname, status = 200, body;
+    if (path.endsWith('/')) path += 'index.html';
+    try { body = await readFile(join(root, decodeURIComponent(path))); }
+    catch { body = await readFile(join(root, '404.html')); status = 404; path = '/404.html'; }
+    if (ctl.patch && path === '/404.html') body = Buffer.from(ctl.patch(String(body)));
+    res.writeHead(status, { 'content-type': TYPES[extname(path)] || 'text/html', 'cache-control': 'max-age=600' });
+    res.end(body);
+  };
+  const server = createServer((req, res) => {
+    if (ctl.net === 'down') { req.socket.destroy(); return; }
+    if (ctl.net === 'stalled') { ctl.held.push([req, res]); return; }
+    serve(req, res);
+  });
+  ctl.unstall = () => { ctl.net = 'up'; return Promise.all(ctl.held.splice(0).map(([q, s]) => serve(q, s))); };
+  ctl.close = () => { for (const [q] of ctl.held.splice(0)) q.socket.destroy(); server.closeAllConnections(); return new Promise(r => server.close(r)); };
+  return new Promise(r => server.listen(0, () => { ctl.base = `http://localhost:${server.address().port}/`; r(ctl); }));
+}
+
+// A sticker tapped on a phone that has never opened Switchboard's own page (a tenant's): online, with no signal, and on
+// a connection that's up but not answering. The apps' addresses answer with a stand-in page, so where a tap lands shows.
+export async function resolverChecks({ browser, assert }) {
+  const srv = await pagesServer();
+  const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true });
+  await ctx.route(/^https:\/\//, r => r.fulfill({ contentType: 'text/html', body: '<!doctype html><title>the app</title>' }));
+  const errors = [];
+  ctx.on('page', p => p.on('pageerror', e => errors.push(e.message)));
+  // A tap: where the phone ends up (an app's address) and how long it took, or the page it stayed on.
+  const tap = async (path, ms = 10000) => {
+    const p = await ctx.newPage(), t0 = Date.now();
+    const went = p.goto(srv.base + path.replace(/^\//, ''), { timeout: ms }).catch(e => e);
+    await Promise.race([p.waitForURL(/^https:/, { timeout: ms }).catch(() => {}), went.then(() => p.waitForTimeout(500))]);
+    const out = { url: p.url(), took: Date.now() - t0, text: /^https:/.test(p.url()) ? '' : (await p.locator('body').textContent().catch(() => '')).replace(/\s+/g, ' ').trim() };
+    await p.close();
+    return out;
+  };
+  const worker = () => ctx.serviceWorkers().find(w => w.url() === srv.base + 'sw.js');
+  try {
+    let r = await tap('/h/first-tap');
+    assert.equal(r.url, 'https://placard.junkdrawer.works/#first-tap', 'an online tap did not reach the app');
+    // that one tap leaves the resolver's offline copy on the phone
+    for (const end = Date.now() + 10000; !(await worker()?.evaluate(() => caches.match('404.html').then(Boolean)).catch(() => false));) {
+      assert.ok(Date.now() < end, 'a phone whose only visit was a sticker tap has no offline copy of the resolver');
+      await new Promise(res => setTimeout(res, 200));
+    }
+    // no signal: the next tap still reaches the app (which opens from its own copy)
+    srv.net = 'down';
+    r = await tap('/h/water-heater');
+    assert.equal(r.url, 'https://placard.junkdrawer.works/#water-heater', `with no signal a tap stayed on ${r.url}: ${r.text.slice(0, 80)}`);
+    // an address that isn't a whole tag shows the resolver's own page (not Switchboard's home without its files)
+    r = await tap('/x/foo');
+    assert.match(r.text, /This tag isn't set up/, 'offline, /x/foo did not show the resolver page: ' + r.text);
+    r = await tap('/h/');
+    assert.match(r.text, /This tag isn't set up/, 'offline, /h/ did not show the resolver page: ' + r.text.slice(0, 120));
+    // one bar: the connection is up but nothing answers. The tap lands from the copy within a few seconds.
+    srv.net = 'stalled';
+    r = await tap('/h/smoke-co');
+    assert.equal(r.url, 'https://placard.junkdrawer.works/#smoke-co', 'on a stalled connection the tap never opened');
+    assert.ok(r.took < 8000, `on a stalled connection the tap took ${r.took} ms`);
+    await srv.unstall();
+    // the network comes first when it answers, so a change to OVERRIDES reaches a phone that has the copy
+    srv.patch = b => b.replace('var OVERRIDES = {\n};', "var OVERRIDES = {\n  'h/water-heater': 'https://example.com/manual'\n};");
+    r = await tap('/h/water-heater');
+    assert.equal(r.url, 'https://example.com/manual', 'a phone with the offline copy missed a change to OVERRIDES');
+    srv.patch = null;
+    assert.deepEqual(errors, [], 'errors on the resolver page');
+  } finally {
+    await ctx.close();
+    await srv.close();
+  }
+}
 
 // A pretend Chrome NFC reader: scan() listens until its signal aborts; __nfc.tap(url) holds a sticker to it (no url: a
 // blank one) and says whether anything was listening.
@@ -63,7 +147,8 @@ async function checkATag({ page, base, assert }) {
   assert.equal(await text('#check-out .tape-cap'), 'f / Frostbite');
 }
 
-export async function appChecks({ page, base, assert, problems }) {
+export async function appChecks({ page, ctx, base, assert, problems }) {
+  await resolverChecks({ browser: ctx.browser(), assert });
   await checkATag({ page, base, assert });
   // a toast takes the phone's width, so a sentence stays on one or two lines (left: 50% once squeezed it into half)
   await page.evaluate(() => window.__switchboard.toast('Couldn\'t send it. Check the signal, or call.'));

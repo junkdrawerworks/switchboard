@@ -14,7 +14,7 @@
 - **The ledger.** `ledger/Code.gs` is a Google Apps Script for a Google Sheet you own: each tab is one app's collection, each row a record. The apps, a Raspberry Pi and ESP32 boards all read and write it with one key. Only the house manual's pages are readable without the key.
 - **Connect.** Each app lives at its own address, so each needs the ledger once. Switchboard makes a link per app that carries the address and key and opens the app with them filled in.
 - **Check a tag.** Hold any sticker to the phone to see which app it belongs to and where it goes. Web NFC needs Chrome on Android.
-- **Offline.** Once opened, a tag tapped with no signal still reaches the app's offline copy.
+- **Offline.** Any phone that has tapped one sticker online keeps a copy of the resolver (about 160 KB, fetched in the background on that first tap), so a later tap with no signal, or on one bar that never answers, still reaches the app's offline copy within a few seconds.
 
 ## Running it
 
