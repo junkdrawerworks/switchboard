@@ -2,6 +2,7 @@
 // Each app keeps a mirror of its collections in localStorage, so it opens instantly and works with no signal;
 // writes go into an outbox and are sent in one batch when the ledger answers.
 const jget = k => { try { return JSON.parse(localStorage.getItem(k) || 'null'); } catch { return null; } };
+const sget = k => { try { return localStorage.getItem(k); } catch { return null; } };
 const jset = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} };
 const clone = o => JSON.parse(JSON.stringify(o));
 
@@ -44,6 +45,11 @@ const TIMEOUT = 45000;
 const RESYNC = 30000; // coming back to the page brings it up to date, at most this often
 const later = (fn, ms) => { const t = setTimeout(fn, ms); t?.unref?.(); return t; }; // unref: Node's tests don't wait on it
 export const CANT_REACH = 'Can\'t reach the ledger yet. This opens as soon as it can.';
+// Two tabs of one app (the installed app left open, and the tab a sticker tap opened) share its storage: the outbox
+// (<app>.outbox), the mirror (<app>.m.<collection>) and <app>.rev, which changes with every write. A tab whose rev is
+// out of date reads the others' writes back before it shows or changes anything, so neither drops the other's.
+// <app>.touched says when this phone last changed each record, so a list Google read before that change can't undo it.
+const TOUCH_KEEP = 120000;
 
 export class Ledger {
   constructor(app, { demo = null, fetchImpl = null } = {}) {
@@ -53,6 +59,8 @@ export class Ledger {
     this.fetch = fetchImpl || ((...a) => fetch(...a));
     this.mirror = {};
     this.outbox = this.demo ? [] : (jget(app + '.outbox') || []);
+    this.rev = this.demo ? null : sget(app + '.rev');
+    this.touchedHere = {};    // the same as <app>.touched, for the sample (which keeps nothing)
     this.listeners = new Set();
     this.state = this.demo ? 'demo' : (this.connected ? (this.outbox.length ? 'pending' : 'idle') : 'unset');
     this.lastError = '';
@@ -88,12 +96,31 @@ export class Ledger {
   }
   async ping() { return this.call({ op: 'ping' }); }
 
-  // ---- the mirror
+  // ---- the mirror, and what other tabs of this app wrote
+  // True when another tab had written since this one last looked: the outbox and mirror are now theirs plus ours.
+  fresh() {
+    if (this.demo) return false;
+    const rev = sget(this.app + '.rev');
+    if (rev === this.rev) return false;
+    this.rev = rev;
+    this.outbox = jget(this.app + '.outbox') || [];
+    for (const coll of Object.keys(this.mirror)) this.mirror[coll] = jget(`${this.app}.m.${coll}`) || { docs: {}, since: 0 };
+    return true;
+  }
+  stamp() { if (!this.demo) { this.rev = Date.now().toString(36) + Math.random().toString(36).slice(2, 8); jset(this.app + '.rev', this.rev); } }
   m(coll) {
+    this.fresh();
     if (!this.mirror[coll]) this.mirror[coll] = (this.demo ? null : jget(`${this.app}.m.${coll}`)) || { docs: {}, since: 0 };
     return this.mirror[coll];
   }
-  save(coll) { if (!this.demo) jset(`${this.app}.m.${coll}`, this.m(coll)); }
+  save(coll) { if (!this.demo) { jset(`${this.app}.m.${coll}`, this.m(coll)); this.stamp(); } }
+  touch(coll, id) {
+    const now = Date.now(), t = this.touched();
+    for (const k of Object.keys(t)) if (t[k] < now - TOUCH_KEEP) delete t[k];
+    t[coll + '/' + id] = now;
+    if (this.demo) this.touchedHere = t; else jset(this.app + '.touched', t);
+  }
+  touched() { return this.demo ? { ...this.touchedHere } : jget(this.app + '.touched') || {}; }
   docs(coll) { return Object.values(this.m(coll).docs).filter(d => !d._deleted); }
   doc(coll, id) { const d = this.m(coll).docs[id]; return d && !d._deleted ? d : null; }
   has(coll) { return this.m(coll).since > 0 || Object.keys(this.m(coll).docs).length > 0; }
@@ -107,24 +134,26 @@ export class Ledger {
     if (!doc.id) throw new Error('doc needs an id');
     const d = { ...clone(doc), _updated: Date.now() };
     delete d._deleted;
-    this.m(coll).docs[d.id] = d; this.save(coll);
+    this.m(coll).docs[d.id] = d; this.touch(coll, d.id); this.save(coll);
     this.queue({ op: 'put', app: this.app, coll, id: d.id, doc: d });
     return d;
   }
   del(coll, id) {
     const mm = this.m(coll);
-    mm.docs[id] = { id, _deleted: true, _updated: Date.now() }; this.save(coll);
+    mm.docs[id] = { id, _deleted: true, _updated: Date.now() }; this.touch(coll, id); this.save(coll);
     this.queue({ op: 'del', app: this.app, coll, id });
   }
   queue(op) {
+    this.fresh();                                    // another tab's waiting writes stay in
     this.outbox = this.outbox.filter(o => !(o.coll === op.coll && o.id === op.id)); // only the latest write per doc
     this.outbox.push(op);
-    if (!this.demo) jset(this.app + '.outbox', this.outbox);
+    if (!this.demo) { jset(this.app + '.outbox', this.outbox); this.stamp(); }
     if (this.state !== 'offline') this.state = 'pending';
     this.emit();
     clearTimeout(this._t); this._t = later(() => this.flush(), 400);
   }
-  get pending() { return this.outbox.length; }
+  get pending() { this.fresh(); return this.outbox.length; }
+  waiting(coll) { this.fresh(); return this.outbox.filter(o => o.coll === coll).map(o => o.id); }
 
   // Sends the outbox, 40 at a time (the next batch goes on its own). Resolves false if the batch didn't go.
   flush() {
@@ -134,24 +163,30 @@ export class Ledger {
     return p;
   }
   async _flush() {
+    this.fresh();
     const ops = this.outbox.slice(0, 40);
     let ok = false;
     try {
       await this.call({ op: 'batch', ops });
-      this.outbox = this.outbox.filter(o => !ops.includes(o));
-      if (!this.demo) jset(this.app + '.outbox', this.outbox);
+      this.fresh();                                  // what went, by content: a newer write of the same record stays
+      const sent = new Set(ops.map(o => JSON.stringify(o)));
+      this.outbox = this.outbox.filter(o => !sent.has(JSON.stringify(o)));
+      if (!this.demo) { jset(this.app + '.outbox', this.outbox); this.stamp(); }
       this.state = this.demo ? 'demo' : this.outbox.length ? 'pending' : 'synced'; this.lastError = '';
-      this.tries = 0; clearTimeout(this._r); ok = true;
+      this.tries = 0; ok = true;
     } catch (e) {
       this.state = 'offline'; this.lastError = e.message;
     }
     this.emit();
     if (!ok) { this.retry(); return false; }
+    this.calm();
     if (this.outbox.length) { this._flushing = null; this.flush(); }
     return true;
   }
 
-  // Brings collections up to date. Docs with a write still in the outbox keep the local copy.
+  // Brings collections up to date. A record with a write waiting (when the list is asked for, or still when it comes
+  // back), or changed on this phone since it was asked for, keeps the copy here: the list may have been read before
+  // that write reached the sheet.
   sync(colls) {
     if (!this.connected) return Promise.resolve(false);
     if (this._syncing) return this._syncing;
@@ -159,31 +194,32 @@ export class Ledger {
     return this._syncing;
   }
   async _sync(colls) {
-    await this.flush();
+    const sent = await this.flush();
     const ready = colls.map(c => this.has(c)).join();
     let changed = false, ok = false;
     try {
       for (const coll of colls) {
-        const mm = this.m(coll);
-        const j = await this.call({ op: 'list', app: this.app, coll, since: mm.since });
-        const waiting = new Set(this.outbox.filter(o => o.coll === coll).map(o => o.id));
+        const asked = Date.now(), waitingThen = this.waiting(coll);
+        const j = await this.call({ op: 'list', app: this.app, coll, since: this.m(coll).since });
+        const mm = this.m(coll), touched = this.touched();
+        const waiting = new Set([...waitingThen, ...this.waiting(coll)]);
         for (const d of j.docs) {
-          if (waiting.has(d.id)) continue;
+          if (waiting.has(d.id) || touched[coll + '/' + d.id] >= asked) continue;
           if (!changed && JSON.stringify(mm.docs[d.id]) !== JSON.stringify(d)) changed = true;
           mm.docs[d.id] = d;
         }
         mm.since = (j.time || Date.now()) - 5000; // overlap: a write in the same moment as the list is fetched again, never missed
         this.save(coll);
       }
-      this.state = this.demo ? 'demo' : this.outbox.length ? 'pending' : 'synced'; this.lastError = '';
-      this.tries = 0; clearTimeout(this._r); ok = true;
+      if (sent) { this.state = this.demo ? 'demo' : this.outbox.length ? 'pending' : 'synced'; this.lastError = ''; }
+      ok = true;
     } catch (e) {
       this.state = 'offline'; this.lastError = e.message;
     }
     const first = !this.synced && !this.syncFailed;
     this.synced ||= ok; this.syncFailed = !ok; this.lastSync = Date.now();
     this.emit();
-    if (!ok) this.retry();
+    if (ok) this.calm(); else this.retry();
     if (changed || first || ready !== colls.map(c => this.has(c)).join()) this.changed();
     return ok;
   }
@@ -198,22 +234,31 @@ export class Ledger {
     on(w, 'online', () => this.wake(true));
     on(w, 'pageshow', e => { if (e.persisted) this.wake(); });
     on(d, 'visibilitychange', () => { if (d.visibilityState === 'visible') this.wake(); else this.flush(); });
+    on(w, 'storage', e => { if ((e.key == null || e.key.startsWith(this.app + '.')) && this.fresh()) { this.emit(); this.changed(); } });
     if (this.connected) this.sync(colls);
     return this;
   }
   // The signal is back, or the page is in front again: send what's waiting, and catch up if it's been a while.
   wake(now = false) {
     if (this.stopped || !this.connected) return;
+    this.tries = 0;                                  // a fresh start: tries after this one back off from 5 s again
     if (this.colls && (now || this.syncFailed || Date.now() - this.lastSync > RESYNC)) this.sync(this.colls);
     else this.flush();
   }
+  get behind() { return !!(this.outbox.length || (this.colls && this.syncFailed)); }
+  // After a try that failed: the next one, later each time.
   retry() {
     clearTimeout(this._r);
-    if (this.stopped || this.demo || !this.connected) return;
-    if (!this.outbox.length && !(this.colls && this.syncFailed)) { this.tries = 0; return; }
-    this._r = later(() => { this._r = null; this.colls ? this.sync(this.colls) : this.flush(); }, RETRY[Math.min(this.tries, RETRY.length - 1)]);
+    if (this.stopped || this.demo || !this.connected || !this.behind) return;
+    this._r = later(async () => {
+      this._r = null;
+      await (this.colls ? this.sync(this.colls) : this.flush());
+      if (this.behind && !this._r) this.retry();      // it joined a sync already on its way, which left things waiting
+    }, RETRY[Math.min(this.tries, RETRY.length - 1)]);
     this.tries++;
   }
+  // After a try that worked: no more tries once nothing is waiting (a timer set by an earlier failure stays otherwise).
+  calm() { if (!this.behind) { clearTimeout(this._r); this._r = null; this.tries = 0; } }
   // Tells the page to draw again, but not under someone typing into a box on the page itself (Larder's search):
   // that waits until they leave the box. Forms in a sheet (a dialog) aren't redrawn, so they don't wait.
   changed() {
@@ -230,6 +275,7 @@ export class Ledger {
 
   statusText() {
     if (this.demo) return 'Sample data: nothing is kept';
+    this.fresh();
     return ({ demo: 'Sample data — nothing is saved', unset: 'Not connected to the ledger', idle: 'Connected',
       synced: 'Saved', pending: `Saving ${this.outbox.length}…`, offline: `Offline — ${this.outbox.length} waiting` })[this.state] || '';
   }

@@ -197,12 +197,12 @@ async function world() {
   const { Ledger } = await import('../js/kit/ledger.js');
   const { g, props, sheets } = fakeGoogle();
   g.setup();
-  const net = { up: true, hold: null, hang: false, calls: 0 };
+  const net = { up: true, hold: null, hang: false, calls: 0, fail: null };
   // hold(body) may return a promise: the request is applied when it resolves, then answered. hang: Google takes the
   // request and never answers (only the page's own timeout ends it).
   const fetchImpl = async (url, o) => {
     net.calls++;
-    if (!net.up) throw new TypeError('Failed to fetch');
+    if (!net.up || net.fail?.(JSON.parse(o.body))) throw new TypeError('Failed to fetch');
     if (net.hang) return new Promise((res, rej) => o.signal?.addEventListener('abort', () => rej(new DOMException('The operation was aborted.', 'AbortError'))));
     const body = JSON.parse(o.body);
     const early = net.hold ? await net.hold(body) : null;
@@ -266,6 +266,43 @@ test('a request Google never answers ends as offline after 45 s, and the save go
   assert.ok(sheet('frostbite', 'items').peas && sheet('frostbite', 'items').corn);
 });
 
+test('a sync whose send fails but whose lists come back still tries the send again', async t => {
+  const { net, open, sheet } = await world();
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const a = open();
+  a.keepUp(['items'], () => {});
+  for (let i = 0; i < 5; i++) await tick();
+  net.fail = b => b.op === 'batch';                               // the send's answer is lost; lists are fine
+  a.put('items', { id: 'peas', name: 'Peas' });
+  t.mock.timers.tick(400); for (let i = 0; i < 5; i++) await tick();   // its own send fails: a retry in 5 s
+  await a.sync(['items']);                                        // fails to send again (retry in 15 s), lists fine
+  assert.equal(a.pending, 1);
+  net.fail = null;
+  for (let s = 0; s < 20; s++) { t.mock.timers.tick(1000); for (let i = 0; i < 5; i++) await tick(); }
+  assert.equal(a.pending, 0);
+  assert.ok(sheet('frostbite', 'items').peas);
+});
+
+test('a retry that joins a sync already on its way tries again after it, if things are still waiting', async t => {
+  const { net, open, sheet } = await world();
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const a = open();
+  a.keepUp(['items', 'zones'], () => {});
+  for (let i = 0; i < 5; i++) await tick();
+  let release;
+  net.fail = b => b.op === 'batch';
+  a.put('items', { id: 'peas', name: 'Peas' });
+  t.mock.timers.tick(400); for (let i = 0; i < 5; i++) await tick();   // its own send fails: a retry in 5 s
+  net.hold = b => (b.op === 'list' && b.coll === 'zones' ? new Promise(r => { release = r; }) : null);
+  const s1 = a.sync(['items', 'zones']);                         // fails to send (retry in 15 s); its second list is slow
+  for (let i = 0; i < 5; i++) await tick();
+  for (let s = 0; s < 16; s++) { t.mock.timers.tick(1000); for (let i = 0; i < 5; i++) await tick(); }   // the retry joins it
+  net.fail = null; net.hold = null; release(); await s1;
+  for (let s = 0; s < 60; s++) { t.mock.timers.tick(1000); for (let i = 0; i < 5; i++) await tick(); }
+  assert.equal(a.pending, 0, 'the change went on a later try');
+  assert.ok(sheet('frostbite', 'items').peas);
+});
+
 test('a new phone that can\'t reach the ledger says so, then fills in by itself', async t => {
   const { net, open, g, props } = await world();
   post(g, { key: props.KEY, op: 'put', app: 'mothball', coll: 'totes', id: '04', doc: { name: 'Wreaths' } });
@@ -287,7 +324,7 @@ test('a new phone that can\'t reach the ledger says so, then fills in by itself'
   assert.equal(draws, 2, 'and draws again with the tote');
 });
 
-test('a list answer read before a save does not put the old copy back after the save is answered', { todo: 'sync keeps only ids still in the outbox' }, async () => {
+test('a list answer read before a save does not put the old copy back after the save is answered', async () => {
   const { net, open, sheet, g, props } = await world();
   post(g, { key: props.KEY, op: 'put', app: 'larder', coll: 'items', id: 'cumin', doc: { name: 'Cumin', state: 'ok' } });
   const a = open('larder');
@@ -310,7 +347,7 @@ test('a list answer read before a save does not put the old copy back after the 
   assert.equal(a.doc('items', 'cumin').state, 'out', 'the screen must keep the saved state');
 });
 
-test('two tabs of one app on one phone never drop each other\'s waiting changes', { todo: 'each Ledger rewrites the shared outbox from its own memory' }, async () => {
+test('two tabs of one app on one phone never drop each other\'s waiting changes', async () => {
   const { net, open } = await world();
   const a = open();
   net.up = false;
@@ -322,7 +359,7 @@ test('two tabs of one app on one phone never drop each other\'s waiting changes'
   assert.deepEqual(c.outbox.map(o => o.id).sort(), ['corn', 'ice', 'peas']);
 });
 
-test('an open tab sees a change made in another tab before its next edit', { todo: 'no storage event / visibility sync: a stale window writes its old copy back' }, async () => {
+test('an open tab sees a change made in another tab before its next edit', async () => {
   const { open, sheet, g, props } = await world();
   post(g, { key: props.KEY, op: 'put', app: 'larder', coll: 'items', id: 'cumin', doc: { name: 'Cumin', state: 'low' } });
   const win = open('larder'); await win.sync(['items']);
