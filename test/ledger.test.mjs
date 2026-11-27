@@ -418,6 +418,16 @@ test('two tabs of one app on one phone never drop each other\'s waiting changes'
   assert.deepEqual(c.outbox.map(o => o.id).sort(), ['corn', 'ice', 'peas']);
 });
 
+test('a tab whose change another tab sent reads Saved, not "Saving 0…"', async () => {
+  const { open, sheet } = await world();
+  const a = open('mothball'), b = open('mothball');
+  a.put('totes', { id: '01', name: 'Lights' });                   // within a's wait before it sends,
+  b.put('totes', { id: '02', name: 'Wreaths' }); await b.flush();  // b sends both
+  assert.deepEqual(Object.keys(sheet('mothball', 'totes')).sort(), ['01', '02']);
+  assert.equal(a.statusText(), 'Saved');
+  assert.equal(a.pending, 0);
+});
+
 test('an open tab sees a change made in another tab before its next edit', async () => {
   const { open, sheet, g, props } = await world();
   post(g, { key: props.KEY, op: 'put', app: 'larder', coll: 'items', id: 'cumin', doc: { name: 'Cumin', state: 'low' } });

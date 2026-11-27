@@ -216,6 +216,7 @@ export class Ledger {
     if (rev === this.rev) return false;
     this.rev = rev;
     this.outbox = jget(this.app + '.outbox') || [];
+    if (this.state === 'pending' && !this.outbox.length) this.state = 'saved';   // the other tab sent this one's changes too
     for (const coll of Object.keys(this.mirror)) this.mirror[coll] = jget(`${this.app}.m.${coll}`) || { docs: {}, since: 0 };
     return true;
   }
