@@ -145,9 +145,13 @@ ul.plain li { overflow-wrap: anywhere; }
 .jd-foot a:hover, .jd-foot a:focus-visible { text-decoration: underline; }
 .jd-foot span { margin: 0 6px; }
 
+/* Printing (Placard's QR backup cards, Mothball's tote labels): only the thing being printed, across the whole page,
+   and in the light palette even from a browser in dark mode. */
 @media print {
+  :root { --bg: #fff; --panel: #fff; --ink: #000; --ink2: #444; --ink3: #555; --line: #bbb; --soft: #eee; color-scheme: light; }
   body { background: #fff; color: #000; padding: 0; }
-  .no-print, .jd-foot, .top .icon-btn, .sync { display: none !important; }
+  .wrap { max-width: none; padding: 0; }
+  .no-print, .jd-foot, header.top, #edit-link, #demo-note, .sync, .toast { display: none !important; }
 }
 
 /* tables */
