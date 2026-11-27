@@ -536,6 +536,30 @@ test('one record the ledger refuses does not hold back the others, and the statu
   assert.doesNotMatch(a.statusText(), /^Saving/);
 });
 
+test('an import fills in and never blanks or replaces: fillIn, what the toast says, and a record deleted here', async () => {
+  const { open } = await world();
+  const { fillIn, importSummary } = await import('../js/kit/ledger.js');
+  const here = { id: '01', _updated: 5, name: 'Porch lights', place: 'Garage', items: ['Timer plug', 'Clips'], out: false, note: '',
+    contact: { name: 'Lab Owner', phone: '', email: '' } };
+  const r = fillIn(here, { id: '01', _deleted: true, name: 'Porch Lights!', place: '', items: ['clips ', 'Spare fuses', ''], note: 'Check the timer.', season: 'christmas',
+    contact: { name: '', phone: '555-0144', email: '' }, box: '' });
+  assert.deepEqual(r.doc, { id: '01', _updated: 5, name: 'Porch lights', place: 'Garage', items: ['Timer plug', 'Clips', 'Spare fuses'], out: false, note: 'Check the timer.',
+    contact: { name: 'Lab Owner', phone: '555-0144', email: '' }, season: 'christmas', box: '' });
+  assert.deepEqual(r.filled.sort(), ['contact', 'items', 'note', 'season']);
+  assert.deepEqual(r.kept.sort(), ['contact', 'items', 'name', 'out', 'place']);
+  assert.deepEqual(here.items, ['Timer plug', 'Clips'], 'the copy here was changed in place');
+  assert.deepEqual(fillIn({ id: 'x', facts: [['a', '']] }, { facts: [['a', 'b']] }, { facts: (h, f) => ({ value: f, filled: true, kept: false }) }),
+    { doc: { id: 'x', facts: [['a', 'b']] }, filled: ['facts'], kept: [] });
+  assert.equal(importSummary({ added: 2, filled: 3, kept: 4 }), 'Added 2, filled in 3, kept your edits.');
+  assert.equal(importSummary({ added: 1, skipped: ['id "Tote 6"'] }, ['page', 'pages']), 'Added 1 page; skipped 1 (id "Tote 6").');
+  assert.equal(importSummary({ added: 16 }, ['page', 'pages']), 'Added 16 pages.');
+  assert.equal(importSummary({ kept: 2, gone: 1 }), 'Nothing new in the file; your edits stay; left out 1 you deleted.');
+  assert.equal(importSummary({ skipped: ['a', 'b', 'c', 'd'] }), 'Nothing new in the file; skipped 4 (a, b, c, …).');
+  const a = open('mothball');
+  a.put('totes', { id: '06', name: 'Tree skirt' }); a.del('totes', '06');
+  assert.deepEqual([a.gone('totes', '06'), a.gone('totes', '07'), a.doc('totes', '06')], [true, false, null]);
+});
+
 test('refusal() follows the ledger script: what it accepts and refuses', async () => {
   const { refusal } = await import('../js/kit/ledger.js');
   const { g, props } = fakeGoogle();

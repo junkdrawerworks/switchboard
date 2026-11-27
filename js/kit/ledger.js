@@ -119,11 +119,49 @@ export function refusal(doc) {
   const { id, _updated, _deleted, ...rest } = doc;
   return JSON.stringify(rest).length > MAX_JSON ? 'too big' : '';
 }
-// An import's toast: 'Imported 12 pages.' or 'Imported 12, skipped 1 with a bad id.' (skipped counts each refusal).
-export function importText(n, skipped, what = 'records') {
-  const bad = skipped['bad id'] || 0, big = skipped['too big'] || 0;
-  if (!bad && !big) return `Imported ${n} ${what}.`;
-  return `Imported ${n}, skipped ${bad + big} ${big ? bad ? 'with a bad id or too big to save' : 'too big to save' : 'with a bad id'}.`;
+// An import over what's here: the file fills in what's empty here and adds what's new, but never blanks or replaces a
+// value here, so what was typed on the phone stays. A list of lines (a tote's contents, its build cards) gains the
+// file's lines it doesn't have yet; an object (a contact card) is filled in field by field. custom[field](here, file)
+// gives { value, filled, kept } for a field with rules of its own (Placard's details). Returns { doc, filled, kept }:
+// the fields filled in or added to, and the fields where this copy kept a value the file has blank, different or not
+// at all.
+const isObj = v => !!v && typeof v === 'object' && !Array.isArray(v);
+export const blank = v => v == null || (typeof v === 'string' && !v.trim()) || (Array.isArray(v) && !v.length) || (isObj(v) && Object.values(v).every(blank));
+const lineKey = s => s.trim().toLowerCase();
+export function fillIn(here, file, custom = {}) {
+  const doc = clone(here), filled = [], kept = [];
+  for (const [k, v] of Object.entries(file)) {
+    if (k === 'id' || k.startsWith('_')) continue;
+    const was = doc[k];
+    if (custom[k]) {
+      const r = custom[k](was, v);
+      doc[k] = r.value; if (r.filled) filled.push(k); if (r.kept) kept.push(k);
+    } else if (blank(v)) {
+      if (!(k in doc)) doc[k] = clone(v); else if (!blank(was)) kept.push(k);
+    } else if (blank(was)) {
+      doc[k] = clone(v); filled.push(k);
+    } else if (isObj(was) && isObj(v)) {
+      const r = fillIn(was, v);
+      doc[k] = r.doc; if (r.filled.length) filled.push(k); if (r.kept.length) kept.push(k);
+    } else if (Array.isArray(was) && Array.isArray(v) && [...was, ...v].every(x => typeof x === 'string')) {
+      const have = new Set(was.map(lineKey)), add = v.filter(x => x.trim() && !have.has(lineKey(x)));
+      if (add.length) { doc[k] = [...was, ...add]; filled.push(k); }
+      const theirs = new Set(v.map(lineKey));
+      if (was.some(x => !theirs.has(lineKey(x)))) kept.push(k);
+    } else if (JSON.stringify(was) !== JSON.stringify(v)) kept.push(k);
+  }
+  for (const k of Object.keys(here)) if (!(k in file) && k !== 'id' && !k.startsWith('_') && !blank(here[k]) && !kept.includes(k)) kept.push(k);
+  return { doc, filled, kept };
+}
+// What an import did, for its toast: 'Added 2, filled in 3, kept your edits.', 'Nothing new in the file; your edits
+// stay.', '…; left out 1 you deleted', '…; skipped 1 (id "Tote 6")'. what: ['page', 'pages'] names what was added.
+export function importSummary({ added = 0, filled = 0, kept = 0, gone = 0, skipped = [] }, what = null) {
+  const did = [added ? `added ${added}${what ? ' ' + what[added === 1 ? 0 : 1] : ''}` : '', filled ? `filled in ${filled}` : ''].filter(Boolean);
+  let text = did.length ? did.join(', ') : 'nothing new in the file';
+  if (kept) text += did.length ? ', kept your edits' : '; your edits stay';
+  if (gone) text += `; left out ${gone} you deleted`;
+  if (skipped.length) text += `; skipped ${skipped.length} (${skipped.slice(0, 3).join(', ')}${skipped.length > 3 ? ', …' : ''})`;
+  return text[0].toUpperCase() + text.slice(1) + '.';
 }
 const STUCK = new Set(['offline', 'badkey', 'broken', 'error']);   // states a new change doesn't paper over
 const failed = (message, kind) => Object.assign(new Error(message), { kind });
