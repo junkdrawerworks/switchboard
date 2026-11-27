@@ -20,12 +20,16 @@ export function h(tag, attrs = {}, ...kids) {
 
 export function mount(el, ...kids) { el.replaceChildren(...kids.flat(9).filter(k => k != null && k !== false)); return el; }
 
+// The toast: one live region (role=status) that is on the page from the start, so even the first thing said in it is
+// read out by a screen reader. It stays long enough to read: 1.2 s and 60 ms a character, at least 2.6 s.
 let toastTimer;
+const toastRegion = () => $('#toast') || document.body.appendChild(h('div', { id: 'toast', class: 'toast', role: 'status', 'aria-live': 'polite' }));
+if (typeof document !== 'undefined') { if (document.body) toastRegion(); else document.addEventListener('DOMContentLoaded', toastRegion); }
+export const toastMs = text => Math.max(2600, 1200 + 60 * String(text).length);
 export function toast(text, kind = '') {
-  let t = $('#toast');
-  if (!t) { t = h('div', { id: 'toast', class: 'toast', role: 'status', 'aria-live': 'polite' }); document.body.append(t); }
+  const t = toastRegion();
   t.textContent = text; t.className = 'toast show ' + kind;
-  clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove('show'), 2600);
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove('show'), toastMs(text));
 }
 
 // A bottom sheet with a form. fields: [{ name, label, type, value, options, placeholder, hint, required }].

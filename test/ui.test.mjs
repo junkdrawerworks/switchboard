@@ -1,7 +1,7 @@
 // The kit's small helpers (js/kit/ui.js) that need no page.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { ageText, agoText, stampText, route, lines, parseDay, dayText } from '../js/kit/ui.js';
+import { ageText, agoText, stampText, route, lines, parseDay, dayText, toastMs } from '../js/kit/ui.js';
 
 const now = new Date(2026, 10, 27, 15, 0);   // 27 Nov 2026, 3 pm, local time
 const day = n => { const d = new Date(2026, 10, 27 - n); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
@@ -49,4 +49,9 @@ test('a day reads in the year written, at local midnight', () => {
   assert.deepEqual([d.getFullYear(), d.getMonth(), d.getDate(), d.getHours(), d.getMinutes()], [2026, 10, 27, 0, 0]);
   assert.equal(parseDay('2026-03-08').getHours(), 0);
   assert.equal(dayText('1999-12-31'), 'Dec 31, 1999');
+});
+
+test('a toast stays long enough to read: 1.2 s and 60 ms a character, at least 2.6 s', () => {
+  assert.equal(toastMs('Saved.'), 2600);
+  assert.equal(toastMs('Read the pack on Cellmate first (on your Wi-Fi), then try again.'), 1200 + 60 * 64);
 });

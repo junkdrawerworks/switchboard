@@ -71,6 +71,9 @@ await page.evaluate(() => document.fonts.ready);
 // The app's own checks (test/app-checks.mjs) use it the way a person would.
 const { appChecks } = await import('./app-checks.mjs');
 await appChecks({ page, ctx, base, assert, problems });
+// The kit's own (test/kit-checks.mjs, from the build folder): the focus ring and the toast, light and dark.
+const { kitChecks } = await import('./kit-checks.mjs');
+await kitChecks({ browser, base, assert });
 await page.goto(base);
 
 // Fits a phone: nothing scrolls sideways.
