@@ -48,9 +48,9 @@ small, .muted { color: var(--ink2); }
 .icon-btn { border: 2px solid var(--line); background: var(--panel); border-radius: 10px; width: 44px; height: 44px; display: grid; place-items: center; font-size: 20px; line-height: 1; }
 .sync { font: 500 12px/1 var(--mono); color: var(--ink3); letter-spacing: .02em; margin: -8px 0 14px; display: flex; gap: 6px; align-items: center; }
 .sync::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--ink3); }
-.sync.synced::before, .sync.idle::before { background: var(--ok); }
+.sync.synced::before, .sync.saved::before, .sync.idle::before { background: var(--ok); }
 .sync.pending::before { background: var(--warn); }
-.sync.offline::before, .sync.unset::before { background: var(--bad); }
+.sync.offline::before, .sync.unset::before, .sync.badkey::before, .sync.broken::before, .sync.error::before { background: var(--bad); }
 .sync.demo::before { background: var(--tape-edge); }
 
 /* label-maker tape: the item's name */

@@ -45,6 +45,26 @@ const TIMEOUT = 45000;
 const RESYNC = 30000; // coming back to the page brings it up to date, at most this often
 const later = (fn, ms) => { const t = setTimeout(fn, ms); t?.unref?.(); return t; }; // unref: Node's tests don't wait on it
 export const CANT_REACH = 'Can\'t reach the ledger yet. This opens as soon as it can.';
+export const WRONG_KEY = 'The ledger turned down this phone\'s key. Press Connect beside this app in Switchboard again.';
+
+// The ledger's own rules for a record (Code.gs write()): an id of 1-60 letters, digits and _ . : -, and at most 45,000
+// characters of JSON without the id. put() and del() refuse anything else before it's queued, so one record the ledger
+// would refuse can't hold up every save after it. refusal(doc) says why: '' (fine), 'bad id' or 'too big'.
+export const ID_RULE = /^[A-Za-z0-9_.:-]{1,60}$/;
+export const MAX_JSON = 45000;
+export function refusal(doc) {
+  if (!doc || !ID_RULE.test(String(doc.id ?? ''))) return 'bad id';
+  const { id, _updated, _deleted, ...rest } = doc;
+  return JSON.stringify(rest).length > MAX_JSON ? 'too big' : '';
+}
+// An import's toast: 'Imported 12 pages.' or 'Imported 12, skipped 1 with a bad id.' (skipped counts each refusal).
+export function importText(n, skipped, what = 'records') {
+  const bad = skipped['bad id'] || 0, big = skipped['too big'] || 0;
+  if (!bad && !big) return `Imported ${n} ${what}.`;
+  return `Imported ${n}, skipped ${bad + big} ${big ? bad ? 'with a bad id or too big to save' : 'too big to save' : 'with a bad id'}.`;
+}
+const STUCK = new Set(['offline', 'badkey', 'broken', 'error']);   // states a new change doesn't paper over
+const failed = (message, kind) => Object.assign(new Error(message), { kind });
 // Two tabs of one app (the installed app left open, and the tab a sticker tap opened) share its storage: the outbox
 // (<app>.outbox), the mirror (<app>.m.<collection>) and <app>.rev, which changes with every write. A tab whose rev is
 // out of date reads the others' writes back before it shows or changes anything, so neither drops the other's.
@@ -81,19 +101,34 @@ export class Ledger {
   on(fn) { this.listeners.add(fn); return () => this.listeners.delete(fn); }
   emit() { for (const fn of this.listeners) try { fn(this); } catch (e) { console.warn(e); } }
 
+  // One request. A failure says what kind it was (e.kind): offline (no signal, or no answer in 45 s), badkey (the key
+  // changed), broken (an answer the page can't read: a deployment set to "Only myself" or deleted answers with a
+  // Google page, which a browser shows as a network error, so a second, plain request tells the two apart) or error
+  // (the ledger said no).
   async call(body) {
     if (this.demo) return this.demo.handle(clone(body));
-    if (!this.connected) throw new Error('not connected');
+    if (!this.connected) throw failed('not connected', 'unset');
     const ac = typeof AbortController === 'function' ? new AbortController() : null;
     const t = ac ? later(() => ac.abort(), this.timeout) : null;
+    let r, j;
     try {
-      const r = await this.fetch(this.cfg.url, { method: 'POST', body: JSON.stringify({ ...body, key: this.cfg.key }), ...(ac ? { signal: ac.signal } : {}) });
-      if (!r.ok) throw new Error('ledger HTTP ' + r.status);
-      const j = await r.json();
-      if (!j.ok) throw new Error(j.error || 'ledger said no');
-      return j;
+      try { r = await this.fetch(this.cfg.url, { method: 'POST', body: JSON.stringify({ ...body, key: this.cfg.key }), ...(ac ? { signal: ac.signal } : {}) }); }
+      catch (e) { throw e.name === 'AbortError' ? failed('no answer in 45 s', 'offline') : failed(e.message, await this.answers() ? 'broken' : 'offline'); }
+      if (!r.ok) throw failed('ledger HTTP ' + r.status, 'broken');
+      try { j = await r.json(); }
+      catch (e) { throw e.name === 'SyntaxError' ? failed('the ledger answered with a page, not data', 'broken') : failed(e.message, 'offline'); }
     } finally { clearTimeout(t); }
+    if (!j.ok) throw failed(j.error || 'ledger said no', /bad key/.test(j.error) ? 'badkey' : 'error');
+    return j;
   }
+  // Does anything answer at the ledger's address? (An opaque answer counts: a Google sign-in or "not found" page.)
+  async answers() {
+    const ac = typeof AbortController === 'function' ? new AbortController() : null;
+    const t = ac ? later(() => ac.abort(), 10000) : null;
+    try { await this.fetch(this.cfg.url, { mode: 'no-cors', ...(ac ? { signal: ac.signal } : {}) }); return true; }
+    catch { return false; } finally { clearTimeout(t); }
+  }
+  fail(e) { this.state = e.kind || 'offline'; this.lastError = e.message; }
   async ping() { return this.call({ op: 'ping' }); }
 
   // ---- the mirror, and what other tabs of this app wrote
@@ -121,17 +156,20 @@ export class Ledger {
     if (this.demo) this.touchedHere = t; else jset(this.app + '.touched', t);
   }
   touched() { return this.demo ? { ...this.touchedHere } : jget(this.app + '.touched') || {}; }
-  docs(coll) { return Object.values(this.m(coll).docs).filter(d => !d._deleted); }
-  doc(coll, id) { const d = this.m(coll).docs[id]; return d && !d._deleted ? d : null; }
+  // A row whose json cell isn't valid JSON comes back as { id, _bad }: it stays out of the app, like a deleted one.
+  docs(coll) { return Object.values(this.m(coll).docs).filter(d => !d._deleted && !d._bad); }
+  doc(coll, id) { const d = this.m(coll).docs[id]; return d && !d._deleted && !d._bad ? d : null; }
   has(coll) { return this.m(coll).since > 0 || Object.keys(this.m(coll).docs).length > 0; }
   // What an empty page should say while these collections have nothing yet: '' once they have (or are known empty).
   notReady(...colls) {
     if (colls.every(c => this.has(c))) return '';
+    if (this.state === 'badkey') return WRONG_KEY;
     return this.syncFailed && !this.synced ? CANT_REACH : 'Loading…';
   }
 
   put(coll, doc) {
-    if (!doc.id) throw new Error('doc needs an id');
+    const why = refusal(doc);
+    if (why) throw Object.assign(new Error(why === 'bad id' ? `bad id ${doc?.id ?? ''}` : 'record too big'), { refused: why });
     const d = { ...clone(doc), _updated: Date.now() };
     delete d._deleted;
     this.m(coll).docs[d.id] = d; this.touch(coll, d.id); this.save(coll);
@@ -139,6 +177,7 @@ export class Ledger {
     return d;
   }
   del(coll, id) {
+    if (refusal({ id })) throw Object.assign(new Error('bad id ' + id), { refused: 'bad id' });
     const mm = this.m(coll);
     mm.docs[id] = { id, _deleted: true, _updated: Date.now() }; this.touch(coll, id); this.save(coll);
     this.queue({ op: 'del', app: this.app, coll, id });
@@ -148,7 +187,7 @@ export class Ledger {
     this.outbox = this.outbox.filter(o => !(o.coll === op.coll && o.id === op.id)); // only the latest write per doc
     this.outbox.push(op);
     if (!this.demo) { jset(this.app + '.outbox', this.outbox); this.stamp(); }
-    if (this.state !== 'offline') this.state = 'pending';
+    if (!STUCK.has(this.state)) this.state = 'pending';
     this.emit();
     clearTimeout(this._t); this._t = later(() => this.flush(), 400);
   }
@@ -172,10 +211,10 @@ export class Ledger {
       const sent = new Set(ops.map(o => JSON.stringify(o)));
       this.outbox = this.outbox.filter(o => !sent.has(JSON.stringify(o)));
       if (!this.demo) { jset(this.app + '.outbox', this.outbox); this.stamp(); }
-      this.state = this.demo ? 'demo' : this.outbox.length ? 'pending' : 'synced'; this.lastError = '';
+      this.state = this.demo ? 'demo' : this.outbox.length ? 'pending' : 'saved'; this.lastError = '';
       this.tries = 0; ok = true;
     } catch (e) {
-      this.state = 'offline'; this.lastError = e.message;
+      this.fail(e);
     }
     this.emit();
     if (!ok) { this.retry(); return false; }
@@ -194,7 +233,7 @@ export class Ledger {
     return this._syncing;
   }
   async _sync(colls) {
-    const sent = await this.flush();
+    const had = this.pending, sent = await this.flush();
     const ready = colls.map(c => this.has(c)).join();
     let changed = false, ok = false;
     try {
@@ -203,7 +242,9 @@ export class Ledger {
         const j = await this.call({ op: 'list', app: this.app, coll, since: this.m(coll).since });
         const mm = this.m(coll), touched = this.touched();
         const waiting = new Set([...waitingThen, ...this.waiting(coll)]);
-        for (const d of j.docs) {
+        const newest = {};                           // one record per id, should the sheet have two rows for one
+        for (const d of j.docs) if (!newest[d.id] || (d._updated || 0) >= (newest[d.id]._updated || 0)) newest[d.id] = d;
+        for (const d of Object.values(newest)) {
           if (waiting.has(d.id) || touched[coll + '/' + d.id] >= asked) continue;
           if (!changed && JSON.stringify(mm.docs[d.id]) !== JSON.stringify(d)) changed = true;
           mm.docs[d.id] = d;
@@ -211,10 +252,11 @@ export class Ledger {
         mm.since = (j.time || Date.now()) - 5000; // overlap: a write in the same moment as the list is fetched again, never missed
         this.save(coll);
       }
-      if (sent) { this.state = this.demo ? 'demo' : this.outbox.length ? 'pending' : 'synced'; this.lastError = ''; }
+      // a send that failed keeps its say in the status line: the lists coming back don't mean the change went
+      if (sent) { this.state = this.demo ? 'demo' : this.outbox.length ? 'pending' : had ? 'saved' : 'synced'; this.lastError = ''; }
       ok = true;
     } catch (e) {
-      this.state = 'offline'; this.lastError = e.message;
+      this.fail(e);
     }
     const first = !this.synced && !this.syncFailed;
     this.synced ||= ok; this.syncFailed = !ok; this.lastSync = Date.now();
@@ -246,10 +288,11 @@ export class Ledger {
     else this.flush();
   }
   get behind() { return !!(this.outbox.length || (this.colls && this.syncFailed)); }
-  // After a try that failed: the next one, later each time.
+  // After a try that failed: the next one, later each time. Not for a key the ledger refuses: only a new connect link
+  // mends that, and it reloads the page.
   retry() {
     clearTimeout(this._r);
-    if (this.stopped || this.demo || !this.connected || !this.behind) return;
+    if (this.stopped || this.demo || !this.connected || !this.behind || this.state === 'badkey') return;
     this._r = later(async () => {
       this._r = null;
       await (this.colls ? this.sync(this.colls) : this.flush());
@@ -273,11 +316,14 @@ export class Ledger {
   }
   stop() { this.stopped = true; clearTimeout(this._r); clearTimeout(this._t); clearTimeout(this._c); this.unlisten.splice(0).forEach(f => f()); }
 
+  // The line under each app's name. Its class is the state: idle, saved and synced are green; pending amber; the rest red.
   statusText() {
     if (this.demo) return 'Sample data: nothing is kept';
     this.fresh();
-    return ({ demo: 'Sample data — nothing is saved', unset: 'Not connected to the ledger', idle: 'Connected',
-      synced: 'Saved', pending: `Saving ${this.outbox.length}…`, offline: `Offline — ${this.outbox.length} waiting` })[this.state] || '';
+    const n = this.outbox.length;
+    return ({ unset: 'Not connected to the ledger', idle: 'Connected', pending: `Saving ${n}…`, saved: 'Saved', synced: 'Up to date',
+      offline: `Offline — ${n} waiting`, badkey: 'Wrong key — connect again from Switchboard',
+      broken: 'The ledger isn\'t answering — check the deployment', error: `The ledger said no (${this.lastError}) — ${n} waiting` })[this.state] || '';
   }
 }
 

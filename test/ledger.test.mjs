@@ -371,10 +371,14 @@ test('an open tab sees a change made in another tab before its next edit', async
   assert.equal(sheet('larder', 'items').cumin.state, 'ok');
 });
 
-test('one record the ledger refuses does not hold back the others, and the status says so', { todo: 'a refused op fails the whole batch forever; status reads "Saving 1…"' }, async () => {
+test('one record the ledger refuses does not hold back the others, and the status says so', async () => {
   const { open, sheet } = await world();
   const a = open('mothball');
-  a.put('builds', { id: 'Tree topper', name: 'from an import file' });
+  // refused before it's queued, with the ledger's own reason, so nothing is stuck behind it
+  assert.throws(() => a.put('builds', { id: 'Tree topper', name: 'from an import file' }), e => e.refused === 'bad id');
+  assert.throws(() => a.put('builds', { id: 'manual', steps: 'x'.repeat(46000) }), e => e.refused === 'too big');
+  assert.throws(() => a.del('builds', 'Tree topper'), /bad id/);
+  assert.equal(a.pending, 0);
   await a.flush();
   a.put('totes', { id: '02', name: 'Halloween' });
   await a.sync(['totes', 'builds']); await a.sync(['totes', 'builds']);
@@ -382,13 +386,93 @@ test('one record the ledger refuses does not hold back the others, and the statu
   assert.doesNotMatch(a.statusText(), /^Saving/);
 });
 
-test('a wrong key does not read as "Offline"', { todo: 'statusText has no state for a refused key' }, async () => {
+test('refusal() follows the ledger script: what it accepts and refuses', async () => {
+  const { refusal } = await import('../js/kit/ledger.js');
+  const { g, props } = fakeGoogle();
+  g.setup();
+  const docs = [{ id: '01' }, { id: 'pinch-cumin-2026-09-01' }, { id: 'a:b.c_d' }, { id: 'x'.repeat(60) }, { id: 'x'.repeat(61) }, { id: 'Tree topper' },
+    { id: '' }, {}, { id: 'p', note: 'é'.repeat(44990) }, { id: 'p', note: 'x'.repeat(44991) }, { id: 'p', _updated: 1, note: 'x'.repeat(44990) }];
+  for (const d of docs) {
+    const r = post(g, { key: props.KEY, op: 'put', app: 'larder', coll: 'items', id: d.id, doc: d });
+    assert.equal(refusal(d) === '', r.ok === true, `${JSON.stringify(d).slice(0, 40)}: kit says "${refusal(d)}", ledger says ${r.error || 'ok'}`);
+  }
+});
+
+test('a wrong key does not read as "Offline"', async () => {
   const { open } = await world();
   const a = open();
   a.setConfig(URL_, 'not-the-key');
   a.put('items', { id: 'peas', name: 'Peas' });
   await a.sync(['items']);
   assert.doesNotMatch(a.statusText(), /Offline/);
+  assert.equal(a.statusText(), 'Wrong key — connect again from Switchboard');
+  assert.equal(a.state, 'badkey');
+  assert.equal(a.pending, 1, 'the change waits for the right key');
+  const b = open('larder');                                       // with nothing waiting, too
+  b.setConfig(URL_, 'not-the-key');
+  await b.sync(['items']);
+  assert.equal(b.statusText(), 'Wrong key — connect again from Switchboard');
+  assert.equal(b.notReady('items'), "The ledger turned down this phone's key. Press Connect beside this app in Switchboard again.", 'an empty page doesn\'t promise to open by itself');
+});
+
+test('the status line says what the ledger is doing: no signal, a broken deployment, a refusal, saved, up to date', async () => {
+  const { net, open, Ledger, props, g } = await world();
+  const a = open('larder');
+  assert.equal(a.statusText(), 'Connected', 'just connected (Switchboard\'s guide quotes it)');
+  await a.sync(['items']);
+  assert.equal(a.statusText(), 'Up to date');
+  a.put('items', { id: 'cumin', name: 'Cumin' });
+  assert.equal(a.statusText(), 'Saving 1…');
+  await a.flush();
+  assert.equal(a.statusText(), 'Saved');
+  net.up = false;
+  a.put('items', { id: 'dill', name: 'Dill' });
+  await a.flush();
+  assert.equal(a.statusText(), 'Offline — 1 waiting');
+  a.put('items', { id: 'mace', name: 'Mace' });
+  assert.equal(a.statusText(), 'Offline — 2 waiting', 'a new change while offline still says offline');
+  net.up = true;
+  await a.sync(['items']);
+  assert.equal(a.statusText(), 'Saved');
+  // a deployment set to "Only myself", or deleted: Google answers with its own page
+  const page = { ok: true, status: 200, json: async () => { throw new SyntaxError('Unexpected token <'); } };
+  const html = new Ledger('larder', { fetchImpl: async () => page });
+  await html.sync(['items']);
+  assert.equal(html.statusText(), 'The ledger isn\'t answering — check the deployment');
+  // ...which a browser usually reports as a network error, since Google's page doesn't allow the app to read it: a
+  // plain request that does get through tells it apart from no signal
+  const cors = new Ledger('larder', { fetchImpl: async (u, o) => { if (o.mode === 'no-cors') return { ok: false, status: 0, type: 'opaque' }; throw new TypeError('Failed to fetch'); } });
+  await cors.sync(['items']);
+  assert.equal(cors.statusText(), 'The ledger isn\'t answering — check the deployment');
+  const none = new Ledger('larder', { fetchImpl: async () => { throw new TypeError('Failed to fetch'); } });
+  await none.sync(['items']);
+  assert.equal(none.statusText(), 'Offline — 0 waiting');
+  // the ledger refuses a batch (a lock it couldn't get in 20 s, say): it keeps saying so after a list comes back
+  const busy = new Ledger('larder', { fetchImpl: async (u, o) => {
+    const b = JSON.parse(o.body);
+    const text = b.op === 'batch' ? JSON.stringify({ ok: false, error: 'Lock timeout' }) : JSON.stringify(post(g, b));
+    return { ok: true, status: 200, json: async () => JSON.parse(text) };
+  } });
+  busy.put('items', { id: 'sage', name: 'Sage' });
+  await busy.sync(['items']);
+  assert.equal(busy.statusText(), 'The ledger said no (Lock timeout) — 1 waiting');
+  for (const l of [html, cors, none, busy]) l.stop();
+  void props;
+});
+
+test('a sheet with two rows for one id shows the newer, and a row with broken json stays out of the app', async () => {
+  const { open, g, props, sheets } = await world();
+  post(g, { key: props.KEY, op: 'put', app: 'frostbite', coll: 'zones', id: 'top', doc: { name: 'Top basket' } });
+  post(g, { key: props.KEY, op: 'put', app: 'frostbite', coll: 'zones', id: 'bin', doc: { name: 'Bin' } });
+  const s = sheets['frostbite.zones'];
+  s.data[2][3] = '{"name": "Bin", oops';                          // a hand edit that broke the json
+  const a = open();
+  const docs = [{ id: 'top', name: 'Top basket, old', _updated: 5 }, { id: 'top', name: 'Top basket', _updated: 9 }, { id: 'top', name: 'Top basket, older', _updated: 1 }];
+  a.call = async b => (b.op === 'list' && b.coll === 'items' ? { ok: true, time: 10000, docs } : post(g, { ...b, key: props.KEY }));
+  await a.sync(['items', 'zones']);
+  assert.equal(a.doc('items', 'top').name, 'Top basket');
+  assert.deepEqual(a.docs('zones').map(z => z.name), ['Top basket']);
+  assert.equal(a.doc('zones', 'bin'), null);
 });
 
 test('an older request from a reloaded page that lands late does not overwrite a newer save', { todo: 'Code.gs applies writes in arrival order; needs a per-device order check' }, async () => {
