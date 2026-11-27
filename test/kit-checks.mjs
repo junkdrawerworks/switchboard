@@ -1,7 +1,7 @@
 // The house kit's own checks, run by test/e2e.mjs in every tag app (copied from the build folder's common/kit by
 // scaffold.py): the keyboard focus ring and the red toast can be seen, light and dark, a toast is announced and stays
 // long enough to read, the sample's Leave the sample is a target a thumb can't miss, and the page shrinks above the
-// on-screen keyboard. fieldsUnderBar and backKeepsPlace are for the apps' own checks.
+// on-screen keyboard. fieldsUnderBar, backKeepsPlace and targetsAudit are for the apps' own checks.
 // WCAG relative luminance and contrast ratio of two computed colours ('rgb(…)' or 'rgba(…)').
 const lum = c => {
   const [r, g, b] = c.match(/[\d.]+/g).slice(0, 3).map(Number).map(v => { v /= 255; return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; });
@@ -62,6 +62,29 @@ export async function backKeepsPlace({ browser, base, assert, app, colls, row = 
       const after = await page.evaluate(() => scrollY);
       assert.ok(Math.abs(after - before) <= 2, `${app}, time ${i + 1}: Back landed at scrollY ${after}, not ${before}`);
       await page.evaluate(() => scrollTo(0, 0));
+    }
+  } finally { await ctx.close(); }
+}
+
+// Every visible link, button and summary in #app is at least 44 px tall, a target a thumb can't miss, on each of the
+// sample's screens given (hashes). A link inside a sentence is left out (WCAG's inline exception), and so is skip, a
+// selector for what another change mends.
+export async function targetsAudit({ browser, base, assert, hashes, skip = '' }) {
+  const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true, serviceWorkers: 'block' });
+  try {
+    const page = await ctx.newPage();
+    for (const hash of hashes) {
+      await page.goto('about:blank');
+      await page.goto(base + '?demo' + hash);
+      await page.waitForFunction(() => document.querySelector('#app a[href], #app button'));
+      await page.evaluate(() => document.fonts.ready);
+      const small = await page.evaluate(skip => [...document.querySelectorAll('#app a[href], #app button, #app summary')].map(el => {
+        const r = el.getBoundingClientRect(), cs = getComputedStyle(el);
+        if (!r.width || !r.height || cs.visibility === 'hidden' || (skip && el.matches(skip))) return null;
+        if (cs.display === 'inline' && el.parentElement.textContent.trim() !== el.textContent.trim()) return null;
+        return r.height < 44 ? `${el.tagName.toLowerCase()} "${el.textContent.trim().slice(0, 30)}" ${Math.round(r.width)} x ${r.height.toFixed(1)}` : null;
+      }).filter(Boolean), skip);
+      assert.deepEqual(small, [], `?demo${hash}: targets under 44 px tall`);
     }
   } finally { await ctx.close(); }
 }
