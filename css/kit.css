@@ -52,9 +52,10 @@ small, .muted { color: var(--ink2); }
 .sync.pending::before { background: var(--warn); }
 .sync.offline::before, .sync.unset::before, .sync.badkey::before, .sync.broken::before, .sync.error::before { background: var(--bad); }
 .sync.demo::before { background: var(--tape-edge); }
-.sync:empty { display: none; }
-.sync + .sample-out { display: inline-block; margin: -6px 0 14px; font-size: 15px; color: var(--ink2); }
-.sync:has(+ .sample-out) { margin-bottom: 6px; } /* not filled yet (an app's Connect first screen): no lone dot */
+.sync:empty { display: none; } /* not filled yet (an app's Connect first screen): no lone dot */
+/* the sample's way out, under its status line: 44 px tall for a thumb, the words where they were */
+.sync + .sample-out { display: inline-block; padding: 11px 0; margin: -17px 0 3px; font-size: 15px; color: var(--ink2); }
+.sync:has(+ .sample-out) { margin-bottom: 6px; } /* room under the status line for Leave the sample */
 
 /* label-maker tape: the item's name */
 .tape-wrap { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; margin: 4px 0 14px; }

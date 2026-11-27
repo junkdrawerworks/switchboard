@@ -1,6 +1,6 @@
 // The house kit's own checks, run by test/e2e.mjs in every tag app (copied from the build folder's common/kit by
-// scaffold.py): the keyboard focus ring and the red toast can be seen, light and dark, and a toast is announced and
-// stays long enough to read.
+// scaffold.py): the keyboard focus ring and the red toast can be seen, light and dark, a toast is announced and stays
+// long enough to read, and the sample's Leave the sample is a target a thumb can't miss.
 // WCAG relative luminance and contrast ratio of two computed colours ('rgb(…)' or 'rgba(…)').
 const lum = c => {
   const [r, g, b] = c.match(/[\d.]+/g).slice(0, 3).map(Number).map(v => { v /= 255; return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; });
@@ -57,6 +57,13 @@ export async function kitChecks({ browser, base, assert }) {
         await page.evaluate(async () => { const { toast } = await import('./js/kit/ui.js'); toast('Saved.'); });
         await page.waitForTimeout(2300);
         assert.equal(await page.locator('#toast.show').count(), 1, 'a short toast went before 2.6 s');
+      }
+      // the sample's way out (in every app that has a sample): at least 44 px tall
+      if (await page.evaluate(() => fetch('js/app.js').then(r => r.text()).then(t => t.includes('sampleLink')))) {
+        await page.goto(base + '?demo');
+        await page.waitForSelector('a.sample-out');
+        const box = await page.locator('a.sample-out').boundingBox();
+        assert.ok(box.height >= 44, `${scheme}: Leave the sample is ${Math.round(box.width)} x ${Math.round(box.height)} px; it needs 44 px of height`);
       }
     } finally { await ctx.close(); }
   }
