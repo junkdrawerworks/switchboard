@@ -1,6 +1,6 @@
 // The ledger's Apps Script (ledger/Code.gs) run in Node against a pretend Google Sheet, and the apps' Ledger class
 // (js/kit/ledger.js) talking to it, so the whole round trip is tested without Google.
-import { test } from 'node:test';
+import { test, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
@@ -188,6 +188,8 @@ test('the apps\' Ledger class syncs through it, keeps an outbox while offline, a
 
 // ---- Invariants the ledger lab (full treatment, round 1) found broken. Each is the shortest sequence that breaks
 // it, against the pretend Sheet. Marked todo until the fix lands; drop the todo with the fix.
+const opened = [];                                  // every Ledger a test opens is stopped after it (its retry timer)
+afterEach(() => { for (const l of opened.splice(0)) l.stop(); });
 const store = () => ({ s: {}, getItem(k) { return this.s[k] ?? null; }, setItem(k, v) { this.s[k] = String(v); }, removeItem(k) { delete this.s[k]; } });
 const URL_ = 'https://script.google.com/macros/s/X/exec';
 async function world() {
@@ -195,22 +197,25 @@ async function world() {
   const { Ledger } = await import('../js/kit/ledger.js');
   const { g, props, sheets } = fakeGoogle();
   g.setup();
-  const net = { up: true, hold: null };
-  // hold(body) may return a promise: the request is applied when it resolves, then answered
+  const net = { up: true, hold: null, hang: false, calls: 0 };
+  // hold(body) may return a promise: the request is applied when it resolves, then answered. hang: Google takes the
+  // request and never answers (only the page's own timeout ends it).
   const fetchImpl = async (url, o) => {
+    net.calls++;
     if (!net.up) throw new TypeError('Failed to fetch');
+    if (net.hang) return new Promise((res, rej) => o.signal?.addEventListener('abort', () => rej(new DOMException('The operation was aborted.', 'AbortError'))));
     const body = JSON.parse(o.body);
     const early = net.hold ? await net.hold(body) : null;
     const text = typeof early === 'string' ? early : JSON.stringify(post(g, body));
     return { ok: true, status: 200, json: async () => JSON.parse(text) };
   };
-  const open = (app = 'frostbite') => { const l = new Ledger(app, { fetchImpl }); if (!l.connected) l.setConfig(URL_, props.KEY); return l; };
+  const open = (app = 'frostbite') => { const l = new Ledger(app, { fetchImpl }); opened.push(l); if (!l.connected) l.setConfig(URL_, props.KEY); return l; };
   const sheet = (app, coll) => Object.fromEntries(post(g, { key: props.KEY, op: 'list', app, coll, since: 0 }).docs.map(d => [d.id, d]));
-  return { g, props, sheets, net, open, sheet };
+  return { g, props, sheets, net, open, sheet, Ledger };
 }
 const tick = () => new Promise(r => setImmediate(r));
 
-test('a save made offline goes out by itself once the signal is back', { todo: 'no flush on online/visibility, no retry timer' }, async t => {
+test('a save made offline goes out by itself once the signal is back', async t => {
   const { net, open, sheet } = await world();
   t.mock.timers.enable({ apis: ['setTimeout', 'setInterval'] });
   const a = open();
@@ -223,6 +228,63 @@ test('a save made offline goes out by itself once the signal is back', { todo: '
   for (let i = 0; i < 120; i++) { t.mock.timers.tick(1000); await tick(); }
   assert.equal(a.pending, 0);
   assert.ok(sheet('frostbite', 'items').peas);
+});
+
+test('the retries back off, and stop once nothing is waiting', async t => {
+  const { net, open } = await world();
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const a = open();
+  net.up = false;
+  a.put('items', { id: 'peas', name: 'Peas' });
+  t.mock.timers.tick(400); await tick(); await tick();
+  const at = [];
+  for (let s = 1; s <= 600; s++) { const n = net.calls; t.mock.timers.tick(1000); await tick(); await tick(); if (net.calls > n) at.push(s); }
+  assert.deepEqual(at.slice(0, 7), [5, 20, 50, 110, 230, 350, 470], 'tries 5 s, 15 s, 30 s, a minute, then every two minutes');
+  net.up = true;
+  t.mock.timers.tick(120000); await tick(); await tick(); await tick();
+  assert.equal(a.pending, 0);
+  const n = net.calls;
+  for (let s = 0; s < 600; s++) { t.mock.timers.tick(1000); await tick(); }
+  assert.equal(net.calls, n, 'no more requests once the outbox is empty');
+});
+
+test('a request Google never answers ends as offline after 45 s, and the save goes on the next try', async t => {
+  const { net, open, sheet } = await world();
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const a = open();
+  net.hang = true;
+  a.put('items', { id: 'peas', name: 'Peas' });
+  t.mock.timers.tick(400); await tick();
+  t.mock.timers.tick(44000); await tick();
+  assert.equal(a.state, 'pending', 'still waiting on the answer');
+  t.mock.timers.tick(1000); await tick(); await tick();
+  assert.equal(a.state, 'offline');
+  net.hang = false;
+  a.put('items', { id: 'corn', name: 'Corn' });                   // a new save is not held up by the stuck one
+  t.mock.timers.tick(400); await tick(); await tick(); await tick();
+  assert.equal(a.pending, 0);
+  assert.ok(sheet('frostbite', 'items').peas && sheet('frostbite', 'items').corn);
+});
+
+test('a new phone that can\'t reach the ledger says so, then fills in by itself', async t => {
+  const { net, open, g, props } = await world();
+  post(g, { key: props.KEY, op: 'put', app: 'mothball', coll: 'totes', id: '04', doc: { name: 'Wreaths' } });
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  net.up = false;
+  const a = open('mothball');
+  let draws = 0;
+  assert.equal(a.notReady('totes'), 'Loading…');
+  a.keepUp(['totes', 'builds'], () => draws++);
+  for (let i = 0; i < 5; i++) await tick();
+  t.mock.timers.tick(20); await tick();
+  assert.equal(a.notReady('totes'), "Can't reach the ledger yet. This opens as soon as it can.");
+  assert.equal(draws, 1, 'the page draws the note');
+  net.up = true;
+  for (let s = 0; s < 6; s++) { t.mock.timers.tick(1000); for (let i = 0; i < 5; i++) await tick(); }
+  t.mock.timers.tick(20); await tick();
+  assert.equal(a.notReady('totes', 'builds'), '');
+  assert.equal(a.doc('totes', '04').name, 'Wreaths');
+  assert.equal(draws, 2, 'and draws again with the tote');
 });
 
 test('a list answer read before a save does not put the old copy back after the save is answered', { todo: 'sync keeps only ids still in the outbox' }, async () => {
