@@ -65,6 +65,12 @@ async function checkATag({ page, base, assert }) {
 
 export async function appChecks({ page, base, assert, problems }) {
   await checkATag({ page, base, assert });
+  // a toast takes the phone's width, so a sentence stays on one or two lines (left: 50% once squeezed it into half)
+  await page.evaluate(() => window.__switchboard.toast('Couldn\'t send it. Check the signal, or call.'));
+  await page.waitForTimeout(300);
+  const t = await page.locator('#toast').evaluate(el => { const r = el.getBoundingClientRect(); return { w: r.width, h: r.height, left: r.left, right: innerWidth - r.right }; });
+  assert.ok(t.h < 50, `the toast wrapped onto ${Math.round(t.h)} px of lines`);
+  assert.ok(Math.abs(t.left - t.right) < 2 && t.left >= 16, `the toast isn't centred with its margins: ${JSON.stringify(t)}`);
   assert.equal(await page.locator('#route-rows tr').count(), 6, 'six letters in the table');
   assert.equal(await page.locator('#app-list li').count(), 5, 'five apps to connect');
   assert.match(await page.locator('#app-list').innerText(), /ledger first/, 'apps wait for the ledger');
