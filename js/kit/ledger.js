@@ -75,18 +75,28 @@ export function connectLink(base, url, key) {
   return `${base}#connect=${b}`;
 }
 
-// Public reads need no key: only collections the ledger lists as public answer (Placard's site).
-export async function publicRead(url, app, coll) {
-  const r = await fetch(`${url}?op=pub&app=${encodeURIComponent(app)}&coll=${encodeURIComponent(coll)}`);
-  const j = await r.json();
-  if (!j.ok) throw new Error(j.error || 'ledger said no');
-  return j.docs;
+// Public reads need no key: only collections the ledger lists as public answer (Placard's site). Google gets 12 s to
+// answer a read and 20 s a report; past that it counts as no signal (e.kind 'offline'), so a tenant on one bar that
+// never answers sees the page's own message (no connection, or the report kept with Text it instead) instead of a
+// wait with no end.
+export const READ_LIMIT = 12000, REPORT_LIMIT = 20000;
+async function answer(url, opts, ms, fetchImpl) {
+  const ac = typeof AbortController === 'function' ? new AbortController() : null;
+  const t = ac ? later(() => ac.abort(), ms) : null;
+  try {
+    const r = await fetchImpl(url, { ...opts, ...(ac ? { signal: ac.signal } : {}) });
+    const j = await r.json();
+    if (!j.ok) throw new Error(j.error || 'ledger said no');
+    return j;
+  } catch (e) {
+    throw e.name === 'AbortError' ? failed(`no answer in ${ms / 1000} s`, 'offline') : e;
+  } finally { clearTimeout(t); }
 }
-export async function publicReport(url, app, coll, doc) {
-  const r = await fetch(url, { method: 'POST', body: JSON.stringify({ op: 'report', app, coll, doc }) });
-  const j = await r.json();
-  if (!j.ok) throw new Error(j.error || 'ledger said no');
-  return j;
+export async function publicRead(url, app, coll, { fetchImpl = (...a) => fetch(...a), limit = READ_LIMIT } = {}) {
+  return (await answer(`${url}?op=pub&app=${encodeURIComponent(app)}&coll=${encodeURIComponent(coll)}`, {}, limit, fetchImpl)).docs;
+}
+export async function publicReport(url, app, coll, doc, { fetchImpl = (...a) => fetch(...a), limit = REPORT_LIMIT } = {}) {
+  return answer(url, { method: 'POST', body: JSON.stringify({ op: 'report', app, coll, doc }) }, limit, fetchImpl);
 }
 
 // After a save that didn't go, try again after 5 s, 15 s, 30 s and a minute, then every two minutes while anything is

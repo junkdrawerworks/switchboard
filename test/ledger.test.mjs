@@ -490,6 +490,30 @@ test('refusal() follows the ledger script: what it accepts and refuses', async (
   }
 });
 
+test('a tenant\'s read gives up after 12 s and a report after 20 s, as no signal; answered, both work as before', async t => {
+  globalThis.localStorage = store();
+  const { publicRead, publicReport } = await import('../js/kit/ledger.js');
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const never = (url, o) => new Promise((res, rej) => o.signal.addEventListener('abort', () => rej(new DOMException('The operation was aborted.', 'AbortError'))));
+  const watch = p => { const w = { done: false }; p.then(v => Object.assign(w, { done: true, v }), e => Object.assign(w, { done: true, e })); return w; };
+  const read = watch(publicRead(URL_, 'placard', 'site', { fetchImpl: never }));
+  const report = watch(publicReport(URL_, 'placard', 'reports', { text: 'Water on the floor' }, { fetchImpl: never }));
+  t.mock.timers.tick(11999); await tick();
+  assert.equal(read.done, false);
+  t.mock.timers.tick(1); await tick();
+  assert.equal(read.e?.kind, 'offline', 'a first visit waits on a read Google never answers');
+  assert.equal(report.done, false, 'a report gets longer');
+  t.mock.timers.tick(8000); await tick();
+  assert.equal(report.e?.kind, 'offline', 'Send waits on a report Google never answers');
+  const { g, props } = fakeGoogle();
+  g.setup();
+  post(g, { key: props.KEY, op: 'put', app: 'placard', coll: 'site', id: 'house', doc: { title: 'House manual' } });
+  const google = async (url, o) => ({ json: async () => (o.method === 'POST' ? post(g, JSON.parse(o.body)) : get(g, Object.fromEntries(new URL(url).searchParams))) });
+  assert.deepEqual((await publicRead(URL_, 'placard', 'site', { fetchImpl: google })).map(d => d.title), ['House manual']);
+  assert.equal((await publicReport(URL_, 'placard', 'reports', { text: 'Water on the floor' }, { fetchImpl: google })).ok, true);
+  await assert.rejects(publicRead(URL_, 'placard', 'reports', { fetchImpl: google }), /not public/);
+});
+
 test('a wrong key does not read as "Offline"', async () => {
   const { open } = await world();
   const a = open();
