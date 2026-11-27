@@ -6,29 +6,48 @@ import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 
 function fakeGoogle() {
+  // What a real Sheet does with a string written into a cell under its Automatic format: one that looks like a number,
+  // TRUE/FALSE or a date is stored as that ('01' becomes 1). A cell formatted as plain text ('@') keeps the string.
+  const sheetValue = v => {
+    if (typeof v !== 'string') return v;
+    if (/^\s*[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?\s*$/.test(v)) return Number(v);
+    if (/^(true|false)$/i.test(v)) return /^true$/i.test(v);
+    const d = /^(\d{4})-(\d{1,2})-(\d{1,2})$/.exec(v) || /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(v);
+    if (d) return v.includes('-') ? new Date(+d[1], d[2] - 1, +d[3]) : new Date(+d[3], d[1] - 1, +d[2]);
+    return v;
+  };
   const sheets = {};
   const props = {};
   const mail = [];
   const cache = {};
+  const locks = [];                                   // the lock and flush calls, in order
   const makeSheet = name => {
     const data = [];
+    const fmt = {}, colFmt = {};                       // number formats: by 'row:col', and whole columns ('A:A')
+    const put = (r, c, x) => { data[r - 1] ||= []; data[r - 1][c - 1] = (fmt[`${r}:${c}`] ?? colFmt[c]) === '@' ? x : sheetValue(x); };
     const s = {
-      name, data,
+      name, data, fmt, colFmt,
+      getName: () => name,
       getLastRow: () => data.length,
+      getMaxRows: () => Math.max(1000, data.length),
       getRange: (r, c, nr = 1, nc = 1) => {
-        if (typeof r === 'string') { // 'A1:B5' or 'B3'
+        if (typeof r === 'string') { // 'A1:B5', 'B3' or a whole column 'A:A'
+          const col = /^([A-Z]):\1$/.exec(r);
+          if (col) return { setNumberFormat(f) { colFmt[col[1].charCodeAt(0) - 64] = f; return this; } };
           const m = /^([A-Z])(\d+)(?::([A-Z])(\d+))?$/.exec(r);
           const c0 = m[1].charCodeAt(0) - 64, r0 = +m[2];
           return s.getRange(r0, c0, m[4] ? +m[4] - r0 + 1 : 1, m[3] ? m[3].charCodeAt(0) - 64 - c0 + 1 : 1);
         }
         return {
-          setValues: v => { v.forEach((row, i) => { data[r - 1 + i] ||= []; row.forEach((x, j) => { data[r - 1 + i][c - 1 + j] = x; }); }); return { setFontWeight() {} }; },
+          setValues: v => { v.forEach((row, i) => row.forEach((x, j) => put(r + i, c + j, x))); return { setFontWeight() {} }; },
           getValues: () => Array.from({ length: nr }, (_, i) => Array.from({ length: nc }, (_, j) => (data[r - 1 + i] || [])[c - 1 + j] ?? '')),
           getValue: () => (data[r - 1] || [])[c - 1] ?? '',
+          setNumberFormat(f) { for (let i = 0; i < nr; i++) for (let j = 0; j < nc; j++) fmt[`${r + i}:${c + j}`] = f; return this; },
           setFontWeight() { return this; },
+          getSheet: () => s, getRow: () => r, getLastRow: () => r + nr - 1, getColumn: () => c, getLastColumn: () => c + nc - 1,
         };
       },
-      appendRow: row => data.push([...row]),
+      appendRow: row => { const r = data.length + 1; row.forEach((x, j) => put(r, j + 1, x)); },
       setFrozenRows() {}, setColumnWidth() {},
     };
     return s;
@@ -39,9 +58,9 @@ function fakeGoogle() {
   };
   let uuid = 0;
   const g = {
-    SpreadsheetApp: { getActive: () => ss },
+    SpreadsheetApp: { getActive: () => ss, flush: () => { locks.push('flush'); } },
     PropertiesService: { getScriptProperties: () => ({ getProperty: k => props[k] ?? null, setProperty: (k, v) => { props[k] = v; } }) },
-    LockService: { getScriptLock: () => ({ waitLock() {}, releaseLock() {} }) },
+    LockService: { getScriptLock: () => ({ waitLock() { locks.push('lock'); }, releaseLock() { locks.push('release'); } }) },
     CacheService: { getScriptCache: () => ({ get: k => cache[k] ?? null, put: (k, v) => { cache[k] = v; } }) },
     MailApp: { sendEmail: (...a) => mail.push(a), getRemainingDailyQuota: () => 100 },
     Session: { getEffectiveUser: () => ({ getEmail: () => 'owner@example.com' }) },
@@ -52,7 +71,7 @@ function fakeGoogle() {
   };
   vm.createContext(g);
   vm.runInContext(readFileSync(new URL('../ledger/Code.gs', import.meta.url), 'utf8'), g);
-  return { g, sheets, props, mail, cache };
+  return { g, sheets, props, mail, cache, locks };
 }
 
 const post = (g, body) => JSON.parse(g.doPost({ postData: { contents: JSON.stringify(body) } }).text);
@@ -90,6 +109,30 @@ test('put, list since, replace, delete and batch', () => {
   assert.equal(q.docs.length, 1); assert.equal(q.docs[0].text, 'Cumin');
   assert.equal(post(g, { key, op: 'list', app: 'larder', coll: 'queue', since: 0, match: { synced: true } }).docs.length, 0);
   assert.match(post(g, { key, op: 'put', app: 'Bad Name', coll: 'x', id: 'a', doc: {} }).error, /bad app/);
+});
+
+test('tote and pack numbers stay text: 01 is saved twice as one row and lists back as 01', () => {
+  const { g, props, sheets } = fakeGoogle();
+  g.setup();
+  const key = props.KEY;
+  post(g, { key, op: 'put', app: 'mothball', coll: 'totes', id: '01', doc: { name: 'Lights' } });
+  post(g, { key, op: 'batch', ops: [{ op: 'put', app: 'mothball', coll: 'totes', id: '01', doc: { name: 'Lights and the rink' } }] });
+  post(g, { key, op: 'put', app: 'mothball', coll: 'totes', id: '2026-12-01', doc: { name: 'A date-shaped id' } });
+  assert.deepEqual(sheets['mothball.totes'].data.slice(1).map(r => r[0]), ['01', '2026-12-01'], 'one row for 01, kept as text');
+  const docs = post(g, { key, op: 'list', app: 'mothball', coll: 'totes', since: 0 }).docs;
+  assert.deepEqual(docs.map(d => [d.id, d.name]), [['01', 'Lights and the rink'], ['2026-12-01', 'A date-shaped id']]);
+  assert.equal(post(g, { key, op: 'get', app: 'mothball', coll: 'totes', id: '01' }).doc.name, 'Lights and the rink');
+  // a tab made by the first version of the script, with no column format: each row it writes is made text first
+  const old = g.SpreadsheetApp.getActive().insertSheet('packrat.packs');
+  old.appendRow(['id', 'updated', 'deleted', 'json']);
+  post(g, { key, op: 'put', app: 'packrat', coll: 'packs', id: '07', doc: { label: '5.0 Ah' } });
+  post(g, { key, op: 'put', app: 'packrat', coll: 'packs', id: '07', doc: { label: '5.0 Ah #2' } });
+  assert.deepEqual(old.data.slice(1).map(r => r[0]), ['07']);
+  // a report's made-up id can be all digits too
+  const rep = post(g, { key, op: 'add', app: 'placard', coll: 'reports', doc: { text: 'x' } });
+  assert.match(rep.id, /^\d+$/, 'the pretend Google makes all-digit ids');
+  assert.equal(sheets['placard.reports'].data[1][0], rep.id);
+  assert.equal(post(g, { key, op: 'list', app: 'placard', coll: 'reports', since: 0 }).docs[0].id, rep.id);
 });
 
 test('only Placard\'s site is public, and public reports are kept, limited and emailed', () => {

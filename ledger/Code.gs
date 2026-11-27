@@ -84,11 +84,19 @@ function tab(name, create) {
   let s = ss.getSheetByName(name);
   if (!s && create) {
     s = ss.insertSheet(name);
+    // Plain text, so a Sheet keeps ids such as 01 (a tote number) as typed instead of turning them into the number 1
+    s.getRange('A:A').setNumberFormat('@');
+    s.getRange('D:D').setNumberFormat('@');
     s.getRange(1, 1, 1, 4).setValues([HEAD]).setFontWeight('bold');
     s.setFrozenRows(1);
     s.setColumnWidth(4, 600);
   }
   return s;
+}
+// The same for one row's id and json cells, before writing them: covers tabs made before the column format was set.
+function asText(s, row) {
+  s.getRange(row, 1).setNumberFormat('@');
+  s.getRange(row, 4).setNumberFormat('@');
 }
 function rows(s) {
   const n = s.getLastRow() - 1;
@@ -137,8 +145,8 @@ function write(o) {
   const ids = s.getLastRow() > 1 ? s.getRange(2, 1, s.getLastRow() - 1, 1).getValues().map(function (r) { return String(r[0]); }) : [];
   const at = ids.indexOf(id);
   const row = [id, now, o.op === 'del', o.op === 'del' ? '' : json];
-  if (at >= 0) s.getRange(at + 2, 1, 1, 4).setValues([row]);
-  else s.appendRow(row);
+  if (at >= 0) { asText(s, at + 2); s.getRange(at + 2, 1, 1, 4).setValues([row]); }
+  else { asText(s, s.getLastRow() + 1); s.appendRow(row); }
   return { ok: true, id: id, updated: now };
 }
 
