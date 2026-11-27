@@ -68,26 +68,58 @@ export async function appChecks({ page, base, assert, problems }) {
   assert.equal(await page.locator('#app-list li').count(), 5, 'five apps to connect');
   assert.match(await page.locator('#app-list').innerText(), /ledger first/, 'apps wait for the ledger');
   assert.equal(await page.locator('#test-panel .url').innerText(), 'https://tag.junkdrawer.works/s/test');
-  // a pretend ledger answers the test: a wrong key, then the right one
+  // a pretend ledger answers the test: Google down, a wrong key, then the right one
+  const from = problems.length;
+  let google = 'up', key = 'k'.repeat(40);
   await page.route('https://script.google.com/**', async route => {
+    if (google === 'down') { await new Promise(r => setTimeout(r, 800)); return route.abort('internetdisconnected'); }
     const body = JSON.parse(route.request().postData() || '{}');
-    const ok = body.key === 'k'.repeat(40);
+    const ok = body.key === key;
     await route.fulfill({ contentType: 'application/json', body: JSON.stringify(ok ? { ok: true, version: '1.0', time: 1 } : { ok: false, error: 'bad key' }) });
   });
+  const state = () => page.locator('#ledger-state').evaluate(el => [el.className, el.textContent]);
+  assert.deepEqual(await state(), ['sync unset', 'Not connected to the ledger']);
   await page.fill('#lurl', 'https://script.google.com/macros/s/AKfyTEST/exec');
+  await page.fill('#lkey', 'k'.repeat(40));
+  google = 'down';
+  await page.click('#ledger-test');
+  await page.waitForFunction(() => document.querySelector('#ledger-msg').className === 'msg bad');
+  assert.equal(await page.locator('#ledger-msg').textContent(), 'Google didn\'t answer. Check the phone is online, then try again.');
+  google = 'up';
   await page.fill('#lkey', 'wrong');
   await page.click('#ledger-test');
   await page.waitForFunction(() => /key is wrong/.test(document.querySelector('#ledger-msg').textContent));
   await page.fill('#lkey', 'k'.repeat(40));
   await page.click('#ledger-test');
   await page.waitForFunction(() => /Connected to ledger v1.0/.test(document.querySelector('#ledger-msg').textContent));
+  assert.deepEqual(await state(), ['sync synced', 'Connected to ledger v1.0']);
   const link = await page.locator('#app-list a').first().getAttribute('href');
   assert.match(link, /^https:\/\/placard\.junkdrawer\.works\/#connect=[A-Za-z0-9_-]+$/);
   const cfg = JSON.parse(Buffer.from(link.split('=')[1].replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString());
   assert.deepEqual(cfg, { u: 'https://script.google.com/macros/s/AKfyTEST/exec', k: 'k'.repeat(40) });
+  // opened again, it asks the ledger: still fine, then the key changed in the sheet (setup run again)
+  await page.reload();
+  await page.waitForFunction(() => document.querySelector('#ledger-state').textContent === 'Connected to ledger v1.0');
+  key = 'n'.repeat(40);
+  await page.reload();
+  await page.waitForFunction(() => document.querySelector('#ledger-state').classList.contains('badkey'));
+  assert.deepEqual(await state(), ['sync badkey', 'Wrong key — copy B2 from the sheet\'s About tab again']);
+  // a new key typed while it was asking isn't put back by the answer
+  google = 'down';
+  await page.reload();
+  assert.deepEqual(await state(), ['sync pending', 'Checking the ledger…']);
+  await page.fill('#lkey', 'n'.repeat(40));
+  await page.waitForFunction(() => document.querySelector('#ledger-state').classList.contains('offline'));
+  assert.equal(await page.inputValue('#lkey'), 'n'.repeat(40));
+  google = 'up';
+  await page.click('#ledger-test');
+  await page.waitForFunction(() => document.querySelector('#ledger-state').textContent === 'Connected to ledger v1.0');
   // the test tag's landing note
   await page.goto('about:blank'); await page.goto(base + '#test');
   assert.equal(await page.locator('#test-ok').isHidden(), false, 'the test tag note shows');
+  // forgotten, so nothing after this asks Google
+  await page.click('#ledger-forget');
+  assert.deepEqual(await state(), ['sync unset', 'Not connected to the ledger']);
   await page.unroute('https://script.google.com/**');
-  for (let i = problems.length - 1; i >= 0; i--) if (/script\.google\.com/.test(problems[i])) problems.splice(i, 1);
+  for (let i = problems.length - 1; i >= from; i--) if (/script\.google\.com|Failed to load resource: net::ERR_INTERNET_DISCONNECTED/.test(problems[i])) problems.splice(i, 1);
 }

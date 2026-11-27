@@ -48,12 +48,30 @@ checkBtn.addEventListener('click', async () => {
 });
 
 // ---- ledger
+// What the ledger said when this page last asked (on open, and at Test and save): { version }, or { error } with the
+// kit's e.kind: badkey, broken (a sign-in or error page instead of the ledger), offline or error (the ledger said no).
+let answer = null;
+const stateLine = e => ({ badkey: 'Wrong key — copy B2 from the sheet\'s About tab again', broken: 'The ledger isn\'t answering — check the deployment',
+  error: `The ledger said no (${e.message})` })[e.kind] || 'Offline — can\'t reach the ledger';
+const failText = e => ({ badkey: 'The address answered, but the key is wrong. Copy it again from the About tab, cell B2.',
+  broken: 'Google answered with a sign-in or error page instead of the ledger. Check the address is the web app\'s (it ends /exec) and the deployment is set to "Anyone", then try again.',
+  error: `The ledger said no (${e.message}).` })[e.kind] || 'Google didn\'t answer. Check the phone is online, then try again.';
 function renderLedger() {
   const st = $('#ledger-state');
-  st.className = 'sync ' + ledger.state; st.textContent = ledger.statusText();
-  if (ledger.cfg.url) { $('#lurl').value = ledger.cfg.url; $('#lkey').value = ledger.cfg.key; }
+  const [k, text] = !ledger.connected ? ['unset', 'Not connected to the ledger'] : !answer ? ['pending', 'Checking the ledger…']
+    : answer.version ? ['synced', `Connected to ledger v${answer.version}`] : [answer.error.kind || 'offline', stateLine(answer.error)];
+  st.className = 'sync ' + k; st.textContent = text;
   $('#ledger-forget').hidden = !ledger.connected;
   renderApps();
+}
+// The saved address and key in the boxes: at load and after Test and save, never under someone typing a new key.
+const fillFields = () => { $('#lurl').value = ledger.cfg.url || ''; $('#lkey').value = ledger.cfg.key || ''; };
+// A key changed in the sheet, or a deployment changed, shows as soon as Switchboard opens, not at the next save.
+async function checkLedger() {
+  if (!ledger.connected) return;
+  answer = null; renderLedger();
+  try { answer = { version: (await ledger.ping()).version }; } catch (e) { answer = { error: e }; }
+  renderLedger();
 }
 $('#ledger-form').addEventListener('submit', async e => {
   e.preventDefault();
@@ -65,16 +83,14 @@ $('#ledger-form').addEventListener('submit', async e => {
   trial.cfg = { url, key };
   try {
     const j = await trial.ping();
-    ledger.setConfig(url, key);
+    ledger.setConfig(url, key); answer = { version: j.version }; fillFields();
     msg.textContent = `Connected to ledger v${j.version}.`; msg.className = 'msg ok'; buzz(60);
   } catch (err) {
-    msg.className = 'msg bad';
-    msg.textContent = /bad key/.test(err.message) ? 'The address answered, but the key is wrong. Copy it again from the About tab, cell B2.'
-      : `The ledger didn't answer (${err.message}). Check the deployment is set to "Anyone", then try again.`;
+    msg.className = 'msg bad'; msg.textContent = failText(err);
   }
   renderLedger();
 });
-$('#ledger-forget').addEventListener('click', () => { ledger.forget(); $('#lurl').value = ''; $('#lkey').value = ''; renderLedger(); });
+$('#ledger-forget').addEventListener('click', () => { ledger.forget(); answer = null; fillFields(); renderLedger(); });
 
 function renderApps() {
   const list = $('#app-list');
@@ -93,6 +109,8 @@ mount($('#test-panel'), nfcPanel(tagUrl('s', 'test'), { label: 'Write test stick
 mount($('#route-rows'), Object.entries(APPS).map(([l, a]) => h('tr', {}, h('td', { class: 'm' }, l), h('td', {}, a.name), h('td', { class: 'm' }, a.base.replace('https://', '')))));
 
 ledger.on(renderLedger);
+fillFields();
 renderLedger();
+checkLedger();
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
 window.__switchboard = { ledger, toast };
