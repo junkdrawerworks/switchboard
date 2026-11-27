@@ -185,3 +185,182 @@ test('the apps\' Ledger class syncs through it, keeps an outbox while offline, a
   assert.equal(b.doc('items', 'i1'), null);
   assert.equal(b.doc('items', 'i2').name, 'Peas');
 });
+
+// ---- Invariants the ledger lab (full treatment, round 1) found broken. Each is the shortest sequence that breaks
+// it, against the pretend Sheet. Marked todo until the fix lands; drop the todo with the fix.
+const store = () => ({ s: {}, getItem(k) { return this.s[k] ?? null; }, setItem(k, v) { this.s[k] = String(v); }, removeItem(k) { delete this.s[k]; } });
+const URL_ = 'https://script.google.com/macros/s/X/exec';
+async function world() {
+  globalThis.localStorage = store();
+  const { Ledger } = await import('../js/kit/ledger.js');
+  const { g, props, sheets } = fakeGoogle();
+  g.setup();
+  const net = { up: true, hold: null };
+  // hold(body) may return a promise: the request is applied when it resolves, then answered
+  const fetchImpl = async (url, o) => {
+    if (!net.up) throw new TypeError('Failed to fetch');
+    const body = JSON.parse(o.body);
+    const early = net.hold ? await net.hold(body) : null;
+    const text = typeof early === 'string' ? early : JSON.stringify(post(g, body));
+    return { ok: true, status: 200, json: async () => JSON.parse(text) };
+  };
+  const open = (app = 'frostbite') => { const l = new Ledger(app, { fetchImpl }); if (!l.connected) l.setConfig(URL_, props.KEY); return l; };
+  const sheet = (app, coll) => Object.fromEntries(post(g, { key: props.KEY, op: 'list', app, coll, since: 0 }).docs.map(d => [d.id, d]));
+  return { g, props, sheets, net, open, sheet };
+}
+const tick = () => new Promise(r => setImmediate(r));
+
+test('a save made offline goes out by itself once the signal is back', { todo: 'no flush on online/visibility, no retry timer' }, async t => {
+  const { net, open, sheet } = await world();
+  t.mock.timers.enable({ apis: ['setTimeout', 'setInterval'] });
+  const a = open();
+  net.up = false;
+  a.put('items', { id: 'peas', name: 'Peas' });
+  await a.flush();
+  t.mock.timers.tick(400); await tick();
+  net.up = true;
+  globalThis.dispatchEvent?.(new Event('online'));
+  for (let i = 0; i < 120; i++) { t.mock.timers.tick(1000); await tick(); }
+  assert.equal(a.pending, 0);
+  assert.ok(sheet('frostbite', 'items').peas);
+});
+
+test('a list answer read before a save does not put the old copy back after the save is answered', { todo: 'sync keeps only ids still in the outbox' }, async () => {
+  const { net, open, sheet, g, props } = await world();
+  post(g, { key: props.KEY, op: 'put', app: 'larder', coll: 'items', id: 'cumin', doc: { name: 'Cumin', state: 'ok' } });
+  const a = open('larder');
+  await a.sync(['items']);
+  let release;
+  net.hold = b => (b.op === 'list' ? new Promise(r => { release = r; }) : null);   // the list is read now, answered later
+  const syncing = a.sync(['items']);
+  await tick();
+  // the list was sent; Google reads it before the save arrives
+  const readEarly = JSON.stringify(post(g, { key: props.KEY, op: 'list', app: 'larder', coll: 'items', since: 0 }));
+  net.hold = null;
+  a.put('items', { ...a.doc('items', 'cumin'), state: 'out' });
+  await a.flush();
+  assert.equal(a.pending, 0);
+  // answer the list with what Google read before the save
+  release(readEarly);
+  await syncing;
+  assert.ok(readEarly.includes('"state":"ok"'));
+  assert.equal(sheet('larder', 'items').cumin.state, 'out');
+  assert.equal(a.doc('items', 'cumin').state, 'out', 'the screen must keep the saved state');
+});
+
+test('two tabs of one app on one phone never drop each other\'s waiting changes', { todo: 'each Ledger rewrites the shared outbox from its own memory' }, async () => {
+  const { net, open } = await world();
+  const a = open();
+  net.up = false;
+  a.put('items', { id: 'peas', name: 'Peas' });
+  const b = open();                         // a sticker tap opens a second tab
+  b.put('items', { id: 'corn', name: 'Corn' });
+  a.put('items', { id: 'ice', name: 'Ice cream' });
+  const c = open();                         // what a reload would find
+  assert.deepEqual(c.outbox.map(o => o.id).sort(), ['corn', 'ice', 'peas']);
+});
+
+test('an open tab sees a change made in another tab before its next edit', { todo: 'no storage event / visibility sync: a stale window writes its old copy back' }, async () => {
+  const { open, sheet, g, props } = await world();
+  post(g, { key: props.KEY, op: 'put', app: 'larder', coll: 'items', id: 'cumin', doc: { name: 'Cumin', state: 'low' } });
+  const win = open('larder'); await win.sync(['items']);
+  const tab = open('larder'); await tab.sync(['items']);
+  tab.put('items', { ...tab.doc('items', 'cumin'), state: 'ok' }); await tab.flush();
+  globalThis.dispatchEvent?.(new Event('visibilitychange'));
+  await tick(); await tick();
+  win.put('items', { ...win.doc('items', 'cumin'), note: 'Penzeys' }); await win.flush();
+  assert.equal(sheet('larder', 'items').cumin.state, 'ok');
+});
+
+test('one record the ledger refuses does not hold back the others, and the status says so', { todo: 'a refused op fails the whole batch forever; status reads "Saving 1…"' }, async () => {
+  const { open, sheet } = await world();
+  const a = open('mothball');
+  a.put('builds', { id: 'Tree topper', name: 'from an import file' });
+  await a.flush();
+  a.put('totes', { id: '02', name: 'Halloween' });
+  await a.sync(['totes', 'builds']); await a.sync(['totes', 'builds']);
+  assert.ok(sheet('mothball', 'totes')['02'], 'the good record reaches the sheet');
+  assert.doesNotMatch(a.statusText(), /^Saving/);
+});
+
+test('a wrong key does not read as "Offline"', { todo: 'statusText has no state for a refused key' }, async () => {
+  const { open } = await world();
+  const a = open();
+  a.setConfig(URL_, 'not-the-key');
+  a.put('items', { id: 'peas', name: 'Peas' });
+  await a.sync(['items']);
+  assert.doesNotMatch(a.statusText(), /Offline/);
+});
+
+test('an older request from a reloaded page that lands late does not overwrite a newer save', { todo: 'Code.gs applies writes in arrival order; needs a per-device order check' }, async () => {
+  const { net, open, sheet } = await world();
+  const a = open('mothball');
+  let release;
+  net.hold = b => (b.op === 'batch' && !release ? new Promise(r => { release = r; }) : null);
+  a.put('totes', { id: '01', name: 'Lights', place: 'Garage' });
+  const first = a.flush();                                         // on its way, Google slow to start
+  await tick();
+  a.put('totes', { ...a.doc('totes', '01'), place: 'Attic' });
+  const b = open('mothball');                                      // reload: the new page resends the newer copy
+  a.fetch = () => new Promise(() => {});                           // the old page is gone: nothing more from it
+  net.hold = null;
+  await b.flush();
+  release(); await first;                                          // the old page's request finally runs
+  assert.equal(sheet('mothball', 'totes')['01'].place, 'Attic');
+});
+
+test('a duplicate row for one id: writes reach it, lists show one record, deletes stick', async () => {
+  const { g, props, sheets } = await world();
+  post(g, { key: props.KEY, op: 'put', app: 'larder', coll: 'queue', id: 'q1', doc: { text: 'Cumin', synced: false } });
+  sheets['larder.queue'].data.push([...sheets['larder.queue'].data[1]]);   // a row copied by hand, or two writes racing the lock
+  post(g, { key: props.KEY, op: 'put', app: 'larder', coll: 'queue', id: 'q1', doc: { text: 'Cumin', synced: true } });
+  const waiting = post(g, { key: props.KEY, op: 'list', app: 'larder', coll: 'queue', since: 0, match: { synced: false } }).docs.filter(d => !d._deleted);
+  assert.equal(waiting.length, 0, 'Home Assistant would add it to the list again every five minutes');
+  post(g, { key: props.KEY, op: 'del', app: 'larder', coll: 'queue', id: 'q1' });
+  const all = post(g, { key: props.KEY, op: 'list', app: 'larder', coll: 'queue', since: 0 }).docs.filter(d => d.id === 'q1');
+  assert.ok(all.every(d => d._deleted), 'a new phone must not see it come back');
+});
+
+test('every write commits before the lock is released', () => {
+  const { g, props, locks } = fakeGoogle();
+  g.setup();
+  post(g, { key: props.KEY, op: 'batch', ops: [{ op: 'put', app: 'larder', coll: 'items', id: 'cumin', doc: { name: 'Cumin' } }] });
+  post(g, { key: props.KEY, op: 'put', app: 'larder', coll: 'items', id: 'dill', doc: { name: 'Dill' } });
+  assert.deepEqual(locks, ['lock', 'flush', 'release', 'lock', 'flush', 'release']);
+});
+
+test('a json cell changed by hand reaches a phone that has already synced, and the About tab is left alone', () => {
+  const { g, props, sheets } = fakeGoogle();
+  g.setup();
+  const key = props.KEY;
+  post(g, { key, op: 'put', app: 'frostbite', coll: 'items', id: 'stew', doc: { name: 'Beef stew', qty: 2 } });
+  post(g, { key, op: 'put', app: 'frostbite', coll: 'items', id: 'peas', doc: { name: 'Peas', qty: 1 } });
+  const s = sheets['frostbite.items'];
+  s.data[1][1] = s.data[2][1] = 1000;                            // saved a while ago
+  const since = 2000;                                            // and the phone has synced since
+  s.data[1][3] = '{"name":"Beef stew","qty":1}';                 // typed into D2
+  g.onEdit({ range: s.getRange(2, 4) });
+  assert.ok(s.data[1][1] > since, 'the hand-edited row has a new updated time');
+  assert.equal(s.data[2][1], 1000, 'the row nobody touched keeps its time');
+  assert.equal(s.data[0][1], 'updated', 'the header row is left alone');
+  const l = post(g, { key, op: 'list', app: 'frostbite', coll: 'items', since }).docs;
+  assert.deepEqual(l.map(d => [d.id, d.qty]), [['stew', 1]]);
+  // a paste over several rows, one of them empty below the records
+  g.onEdit({ range: s.getRange(1, 1, 4, 4) });
+  assert.equal(s.data[3], undefined, 'an empty row gets no stamp');
+  const keyCell = sheets.About.data[1][1];
+  g.onEdit({ range: sheets.About.getRange(2, 2) });
+  assert.equal(sheets.About.data[1][1], keyCell);
+  g.onEdit({ range: s.getRange(2, 6) });                         // a note in column F
+  g.onEdit({});
+});
+
+test('an add sent twice with the same id (a retry) keeps one row and does not undo later changes', { todo: 'add with an id overwrites; Pinch and Cellmate send no id' }, async () => {
+  const { g, props, sheets } = await world();
+  const add = () => post(g, { key: props.KEY, op: 'add', app: 'larder', coll: 'queue', doc: { id: 'pinch-cumin-2026-09-01', item: 'cumin', synced: false } });
+  add();
+  post(g, { key: props.KEY, op: 'put', app: 'larder', coll: 'queue', id: 'pinch-cumin-2026-09-01', doc: { item: 'cumin', synced: true } });
+  add();
+  assert.equal(sheets['larder.queue'].data.length - 1, 1);
+  assert.equal(post(g, { key: props.KEY, op: 'list', app: 'larder', coll: 'queue', since: 0, match: { synced: false } }).docs.length, 0);
+});

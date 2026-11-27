@@ -5,7 +5,7 @@
 // Setup (once): put this file in the sheet's Extensions > Apps Script, run setup(), then Deploy > New deployment >
 // Web app, Execute as: Me, Who has access: Anyone. Every request except the public ones carries the key that
 // setup() writes on the About tab.
-const VERSION = '1.0';
+const VERSION = '1.1';
 const PUBLIC_READ = ['placard.site'];                 // anyone may read these (the rental's tenant pages)
 const PUBLIC_REPORT = { 'placard.reports': 30 };      // anyone may add to these, at most this many an hour
 const HEAD = ['id', 'updated', 'deleted', 'json'];
@@ -23,7 +23,7 @@ function setup() {
     ['Switchboard ledger', 'v' + VERSION],
     ['Key', key],
     ['Reports go to', Session.getEffectiveUser().getEmail()],
-    ['Tabs', 'Each other tab is one collection (app.collection). Edit cells only in the json column, and keep it valid JSON.'],
+    ['Tabs', 'Each other tab is one collection (app.collection). Change a json cell and the apps pick it up at their next sync; keep it valid JSON.'],
     ['Set up', new Date()],
   ]);
   about.setColumnWidth(1, 160); about.setColumnWidth(2, 420);
@@ -76,7 +76,8 @@ function checkName(name) {
 function locked(fn) {
   const lock = LockService.getScriptLock();
   lock.waitLock(20000);
-  try { return fn(); } finally { lock.releaseLock(); }
+  // Google's advice for a sheet: flush before releasing, so the next writer reads every row this one wrote
+  try { return fn(); } finally { SpreadsheetApp.flush(); lock.releaseLock(); }
 }
 
 function tab(name, create) {
@@ -111,10 +112,20 @@ function parse(r) {
   return d;
 }
 
+// One record per id: if a tab has two rows for an id (a row copied by hand), the one changed last counts.
+function newest(rs) {
+  const by = {}, order = [];
+  rs.forEach(function (r) {
+    const id = String(r[0]);
+    if (!(id in by)) order.push(id);
+    if (!(id in by) || (Number(r[1]) || 0) >= (Number(by[id][1]) || 0)) by[id] = r;
+  });
+  return order.map(function (id) { return by[id]; });
+}
 function list(name, since, match) {
   const s = tab(name, false);
   if (!s) return [];
-  return rows(s).filter(function (r) { return r[0] !== '' && (Number(r[1]) || 0) > since; }).map(parse).filter(function (d) {
+  return newest(rows(s).filter(function (r) { return r[0] !== ''; })).filter(function (r) { return (Number(r[1]) || 0) > since; }).map(parse).filter(function (d) {
     if (!match || d._deleted) return true;
     for (const k in match) if (d[k] !== match[k]) return false;
     return true;
@@ -123,7 +134,7 @@ function list(name, since, match) {
 function getDoc(name, id) {
   const s = tab(name, false);
   if (!s) return null;
-  const r = rows(s).filter(function (r) { return String(r[0]) === id; })[0];
+  const r = newest(rows(s).filter(function (r) { return String(r[0]) === id; }))[0];
   return r ? parse(r) : null;
 }
 
@@ -143,11 +154,33 @@ function write(o) {
     if (json.length > 45000) throw new Error('record too big');
   }
   const ids = s.getLastRow() > 1 ? s.getRange(2, 1, s.getLastRow() - 1, 1).getValues().map(function (r) { return String(r[0]); }) : [];
-  const at = ids.indexOf(id);
   const row = [id, now, o.op === 'del', o.op === 'del' ? '' : json];
-  if (at >= 0) { asText(s, at + 2); s.getRange(at + 2, 1, 1, 4).setValues([row]); }
-  else { asText(s, s.getLastRow() + 1); s.appendRow(row); }
+  let found = false;
+  ids.forEach(function (x, i) { // every row with this id, should a tab have two
+    if (x !== id) return;
+    found = true;
+    asText(s, i + 2); s.getRange(i + 2, 1, 1, 4).setValues([row]);
+  });
+  if (!found) { asText(s, s.getLastRow() + 1); s.appendRow(row); }
   return { ok: true, id: id, updated: now };
+}
+
+// A change typed into a collection tab by hand: stamp its row's updated time, so a phone that has already synced
+// fetches the record again (each sync asks only for rows changed since the last one). Google runs this by itself for
+// edits made in the sheet (a simple trigger); the script's own writes don't run it.
+function onEdit(e) {
+  const r = e && e.range;
+  if (!r) return;
+  const s = r.getSheet();
+  if (!/^[a-z0-9-]{1,30}\.[a-z0-9-]{1,30}$/.test(s.getName()) || r.getColumn() > HEAD.length) return;
+  const top = Math.max(2, r.getRow());
+  const ids = r.getLastRow() >= top ? s.getRange(top, 1, r.getLastRow() - top + 1, 1).getValues() : [];
+  let n = ids.length;
+  while (n && ids[n - 1][0] === '') n--;                        // not the empty rows under the records
+  if (!n) return;
+  const now = Date.now();
+  const stamps = s.getRange(top, 2, n, 1).getValues().map(function (v, i) { return [ids[i][0] === '' ? v[0] : now]; });
+  s.getRange(top, 2, n, 1).setValues(stamps);
 }
 
 // A tenant's or a visitor's note from a public page: kept short, counted per hour, and emailed to you.
