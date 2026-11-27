@@ -106,6 +106,7 @@ const TIMEOUT = 45000;
 const RESYNC = 30000; // coming back to the page brings it up to date, at most this often
 const later = (fn, ms) => { const t = setTimeout(fn, ms); t?.unref?.(); return t; }; // unref: Node's tests don't wait on it
 export const CANT_REACH = 'Can\'t reach the ledger yet. This opens as soon as it can.';
+export const STILL_LOADING = 'Still loading from the ledger. Try again in a moment.';
 export const WRONG_KEY = 'The ledger turned down this phone\'s key. Press Connect beside this app in Switchboard again.';
 
 // The ledger's own rules for a record (Code.gs write()): an id of 1-60 letters, digits and _ . : -, and at most 45,000
@@ -147,9 +148,10 @@ export class Ledger {
     this.lastError = '';
     this.timeout = TIMEOUT;
     this.tries = 0;           // failed tries in a row
-    this.synced = false;      // a sync has come back in this page
+    this.answered = false;    // a sync has come back in this page
     this.syncFailed = false;  // the last sync didn't
-    this.lastSync = 0;
+    this.lastSync = 0;        // when the last sync ended in this page, and when the last one that came back did
+    this.listedAt = 0;
     this.colls = null; this.onChange = null; this.stopped = false; this.unlisten = [];
   }
   get connected() { return !!(this.demo || (this.cfg.url && this.cfg.key)); }
@@ -169,7 +171,7 @@ export class Ledger {
   // Forgets this page's copy of everything (after a new ledger, or another tab's), so it all comes from storage again.
   restart() {
     this.mirror = {}; this.outbox = this.demo ? [] : jget(this.app + '.outbox') || []; this.rev = sget(this.app + '.rev');
-    this.synced = false; this.syncFailed = false; this.tries = 0; this.lastError = '';
+    this.answered = false; this.syncFailed = false; this.listedAt = 0; this.tries = 0; this.lastError = '';
   }
   // Another tab connected this app to a ledger, or forgot it.
   reconfig() {
@@ -248,11 +250,25 @@ export class Ledger {
   docs(coll) { return Object.values(this.m(coll).docs).filter(d => !d._deleted && !d._bad); }
   doc(coll, id) { const d = this.m(coll).docs[id]; return d && !d._deleted && !d._bad ? d : null; }
   has(coll) { return this.m(coll).since > 0 || Object.keys(this.m(coll).docs).length > 0; }
-  // What an empty page should say while these collections have nothing yet: '' once they have (or are known empty).
+  // True once a list of this collection has come back on this phone (kept with the copy, so a phone that heard from
+  // the ledger yesterday and has no signal now still counts). Until then the copy can't say which numbers and names
+  // another device already used, so a new record made from it could land on one in the sheet and replace it: the apps
+  // hold back New until it's true. (has() is true for a record only made here, too.) The sample answers at once.
+  synced(coll) { const mm = this.m(coll); return this.demo ? this.answered || this.has(coll) : !!mm.listed || mm.since > 0; }
+  // A record deleted here, or on the sheet as this phone last heard: an import leaves it out.
+  gone(coll, id) { return !!this.m(coll).docs[id]?._deleted; }
+  // What a page should say while these collections haven't been heard from yet ('' once they have): on an empty
+  // list, and beside the buttons that make a new record, which wait for it.
   notReady(...colls) {
-    if (colls.every(c => this.has(c))) return '';
+    if (colls.every(c => this.synced(c))) return '';
     if (this.state === 'badkey') return WRONG_KEY;
-    return this.syncFailed && !this.synced ? CANT_REACH : 'Loading…';
+    return this.syncFailed && !this.answered ? CANT_REACH : 'Loading…';
+  }
+  // Before a new record is made from this copy: if no list has come back in this page for 30 s, ask now (up to 4 s),
+  // so a number or name another device has taken since is seen. No answer (no signal): it goes on with the copy.
+  async catchUp(colls, ms = 4000) {
+    if (this.demo || !this.connected || Date.now() - this.listedAt < RESYNC) return;
+    await Promise.race([this.sync(colls), new Promise(r => later(r, ms))]);
   }
 
   put(coll, doc) {
@@ -322,7 +338,7 @@ export class Ledger {
   }
   async _sync(colls) {
     const had = this.pending, sent = await this.flush();
-    const ready = colls.map(c => this.has(c)).join();
+    const ready = colls.map(c => this.synced(c)).join();
     let changed = false, ok = false;
     try {
       for (const coll of colls) {
@@ -338,6 +354,7 @@ export class Ledger {
           mm.docs[d.id] = d;
         }
         mm.since = (j.time || Date.now()) - 5000; // overlap: a write in the same moment as the list is fetched again, never missed
+        mm.listed = true;
         this.save(coll);
       }
       // a send that failed keeps its say in the status line: the lists coming back don't mean the change went
@@ -346,11 +363,11 @@ export class Ledger {
     } catch (e) {
       this.fail(e);
     }
-    const first = !this.synced && !this.syncFailed;
-    this.synced ||= ok; this.syncFailed = !ok; this.lastSync = Date.now();
+    const first = !this.answered && !this.syncFailed;
+    this.answered ||= ok; this.syncFailed = !ok; this.lastSync = Date.now(); if (ok) this.listedAt = this.lastSync;
     this.emit();
     if (ok) this.calm(); else this.retry();
-    if (changed || first || ready !== colls.map(c => this.has(c)).join()) this.changed();
+    if (changed || first || ready !== colls.map(c => this.synced(c)).join()) this.changed();
     return ok;
   }
 

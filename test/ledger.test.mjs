@@ -383,6 +383,64 @@ test('a new phone that can\'t reach the ledger says so, then fills in by itself'
   assert.equal(draws, 2, 'and draws again with the tote');
 });
 
+test('New waits until a list has come back once on this phone, and that holds across a reload with no signal', async () => {
+  const { net, open, g, props } = await world();
+  const { CANT_REACH } = await import('../js/kit/ledger.js');
+  post(g, { key: props.KEY, op: 'put', app: 'mothball', coll: 'totes', id: '01', doc: { name: 'Porch lights', items: ['Timer plug'] } });
+  net.up = false;
+  const a = open('mothball');
+  assert.equal(a.synced('totes'), false);
+  await a.sync(['totes', 'builds']);
+  assert.deepEqual([a.synced('totes'), a.notReady('totes')], [false, CANT_REACH], 'no answer yet');
+  net.up = true;
+  await a.sync(['totes', 'builds']);
+  assert.deepEqual([a.synced('totes'), a.synced('builds'), a.notReady('totes', 'builds')], [true, true, ''], 'an empty collection counts once listed');
+  // a record only made on this phone is there (has), but the phone still hasn't heard from the ledger
+  const b = open('larder');
+  b.put('items', { id: 'olive-oil', name: 'Olive oil' });
+  assert.deepEqual([b.has('items'), b.synced('items'), b.notReady('items')], [true, false, 'Loading…']);
+  // the next day, no signal: what this phone heard yesterday still counts
+  net.up = false;
+  const c = open('mothball');
+  assert.deepEqual([c.synced('totes'), c.notReady('totes', 'builds')], [true, '']);
+  // a copy kept by the kit before it marked a list (since alone) counts too
+  const was = JSON.parse(localStorage.getItem('mothball.m.totes'));
+  delete was.listed; localStorage.setItem('mothball.m.totes', JSON.stringify(was));
+  assert.equal(open('mothball').synced('totes'), true);
+  // connected to another ledger: nothing heard from it yet
+  c.setConfig('https://script.google.com/macros/s/Y/exec', props.KEY);
+  assert.equal(c.synced('totes'), false);
+  // the sample has nothing to wait for once it has answered
+  const { Ledger } = await import('../js/kit/ledger.js');
+  const d = new Ledger('mothball', { demo: { 'mothball.totes': [] } }); opened.push(d);
+  await d.sync(['totes']);
+  assert.equal(d.synced('totes'), true);
+});
+
+test('before a new record, a page that has heard nothing from the ledger for 30 s asks again, for up to 4 s', async t => {
+  const { net, open, g, props } = await world();
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 1_000_000 });
+  const a = open('packrat');
+  await a.sync(['packs']);
+  post(g, { key: props.KEY, op: 'put', app: 'packrat', coll: 'packs', id: '01', doc: { label: '5.0 Ah #1', rom: '28BBBB0C1B0000A1' } });
+  const calls = net.calls;
+  await a.catchUp(['packs']);
+  assert.equal(net.calls, calls, 'it asked again within 30 s of a list');
+  t.mock.timers.tick(31000);
+  await a.catchUp(['packs']);
+  assert.equal(a.doc('packs', '01')?.label, '5.0 Ah #1', 'the pack another device made in the meantime');
+  // Google takes the request and never answers: after 4 s it goes on with the copy it has
+  t.mock.timers.tick(31000);
+  net.hang = true;
+  let done = false;
+  a.catchUp(['packs']).then(() => { done = true; });
+  for (let i = 0; i < 5; i++) await tick();
+  t.mock.timers.tick(3999); await tick();
+  assert.equal(done, false);
+  t.mock.timers.tick(1); await tick(); await tick();
+  assert.equal(done, true, 'New waited on for a ledger that never answers');
+});
+
 test('a list answer read before a save does not put the old copy back after the save is answered', async () => {
   const { net, open, sheet, g, props } = await world();
   post(g, { key: props.KEY, op: 'put', app: 'larder', coll: 'items', id: 'cumin', doc: { name: 'Cumin', state: 'ok' } });

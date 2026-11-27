@@ -72,6 +72,13 @@ export function sheet({ title, fields = [], body = null, ok = 'Save', danger = n
   });
 }
 
+// A press whose job waits on something first (New tote asks the ledger for the latest): the button is held until then,
+// so a second press doesn't open a second sheet.
+export async function held(btn, p) {
+  if (btn) btn.disabled = true;
+  try { return await p; } finally { if (btn) btn.disabled = false; }
+}
+
 export function confirmSheet(title, text, ok = 'OK') {
   return sheet({ title, body: h('p', {}, text), ok }).then(v => !!v && !v.__danger);
 }
