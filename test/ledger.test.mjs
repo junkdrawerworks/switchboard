@@ -167,6 +167,13 @@ test('a tote saved as 01 by version 1.0 of the script (stored as the number 1) i
   assert.equal(post(g, { key, op: 'get', app: 'mothball', coll: 'totes', id: '1' }).doc.name, 'One');
 });
 
+test('Switchboard asks for the same script version as ledger/Code.gs is', () => {
+  const version = /const VERSION = '([\d.]+)'/.exec(readFileSync(new URL('../ledger/Code.gs', import.meta.url), 'utf8'))?.[1];
+  const want = /const WANT = '([\d.]+)'/.exec(readFileSync(new URL('../js/app.js', import.meta.url), 'utf8'))?.[1];
+  assert.ok(version && want);
+  assert.equal(want, version, 'js/app.js WANT and ledger/Code.gs VERSION differ: Switchboard would call the new script old, or the old one fine');
+});
+
 test('only Placard\'s site is public, and public reports are kept, limited and emailed', () => {
   const { g, props, mail } = fakeGoogle();
   g.setup();

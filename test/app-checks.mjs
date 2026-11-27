@@ -167,12 +167,12 @@ export async function appChecks({ page, ctx, base, assert, problems }) {
   assert.equal(await page.locator('#test-panel .url').innerText(), 'https://tag.junkdrawer.works/s/test');
   // a pretend ledger answers the test: Google down, a wrong key, then the right one
   const from = problems.length;
-  let google = 'up', key = 'k'.repeat(40);
+  let google = 'up', key = 'k'.repeat(40), version = '1.1';
   await page.route('https://script.google.com/**', async route => {
     if (google === 'down') { await new Promise(r => setTimeout(r, 800)); return route.abort('internetdisconnected'); }
     const body = JSON.parse(route.request().postData() || '{}');
     const ok = body.key === key;
-    await route.fulfill({ contentType: 'application/json', body: JSON.stringify(ok ? { ok: true, version: '1.0', time: 1 } : { ok: false, error: 'bad key' }) });
+    await route.fulfill({ contentType: 'application/json', body: JSON.stringify(ok ? { ok: true, version, time: 1 } : { ok: false, error: 'bad key' }) });
   });
   const state = () => page.locator('#ledger-state').evaluate(el => [el.className, el.textContent]);
   assert.deepEqual(await state(), ['sync unset', 'Not connected to the ledger']);
@@ -188,15 +188,28 @@ export async function appChecks({ page, ctx, base, assert, problems }) {
   await page.waitForFunction(() => /key is wrong/.test(document.querySelector('#ledger-msg').textContent));
   await page.fill('#lkey', 'k'.repeat(40));
   await page.click('#ledger-test');
-  await page.waitForFunction(() => /Connected to ledger v1.0/.test(document.querySelector('#ledger-msg').textContent));
-  assert.deepEqual(await state(), ['sync synced', 'Connected to ledger v1.0']);
+  await page.waitForFunction(() => /Connected to ledger v1.1/.test(document.querySelector('#ledger-msg').textContent));
+  assert.deepEqual(await state(), ['sync synced', 'Connected to ledger v1.1']);
+  assert.equal(await page.locator('#ledger-msg').getAttribute('class'), 'msg ok');
+  // the first zip's script (1.0) answers too, but turns tote 01 into 1: amber, and how to paste the new one
+  version = '1.0';
+  await page.click('#ledger-test');
+  await page.waitForFunction(() => /^Connected, but/.test(document.querySelector('#ledger-msg').textContent));
+  assert.equal(await page.locator('#ledger-msg').getAttribute('class'), 'msg wait');
+  assert.equal(await page.locator('#ledger-msg').textContent(), 'Connected, but the script is v1.0. Paste ledger/Code.gs from Switchboard\'s repo over it, Save, then Deploy, '
+    + 'Manage deployments, the pencil, Version: New version, Deploy. Until then don\'t save totes or packs numbered 01 to 09.');
+  assert.deepEqual(await state(), ['sync pending', 'Ledger script v1.0 is older than these apps need (v1.1)']);
+  assert.match(await page.locator('#app-list a').first().getAttribute('href'), /#connect=/, 'Connect went away with an old script');
+  await page.reload();
+  await page.waitForFunction(() => document.querySelector('#ledger-state').textContent === 'Ledger script v1.0 is older than these apps need (v1.1)');
+  version = '1.1';
   const link = await page.locator('#app-list a').first().getAttribute('href');
   assert.match(link, /^https:\/\/placard\.junkdrawer\.works\/#connect=[A-Za-z0-9_-]+$/);
   const cfg = JSON.parse(Buffer.from(link.split('=')[1].replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString());
   assert.deepEqual(cfg, { u: 'https://script.google.com/macros/s/AKfyTEST/exec', k: 'k'.repeat(40) });
   // opened again, it asks the ledger: still fine, then the key changed in the sheet (setup run again)
   await page.reload();
-  await page.waitForFunction(() => document.querySelector('#ledger-state').textContent === 'Connected to ledger v1.0');
+  await page.waitForFunction(() => document.querySelector('#ledger-state').textContent === 'Connected to ledger v1.1');
   key = 'n'.repeat(40);
   await page.reload();
   await page.waitForFunction(() => document.querySelector('#ledger-state').classList.contains('badkey'));
@@ -210,7 +223,7 @@ export async function appChecks({ page, ctx, base, assert, problems }) {
   assert.equal(await page.inputValue('#lkey'), 'n'.repeat(40));
   google = 'up';
   await page.click('#ledger-test');
-  await page.waitForFunction(() => document.querySelector('#ledger-state').textContent === 'Connected to ledger v1.0');
+  await page.waitForFunction(() => document.querySelector('#ledger-state').textContent === 'Connected to ledger v1.1');
   // the test tag's landing note
   await page.goto('about:blank'); await page.goto(base + '#test');
   assert.equal(await page.locator('#test-ok').isHidden(), false, 'the test tag note shows');

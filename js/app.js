@@ -51,6 +51,15 @@ checkBtn.addEventListener('click', async () => {
 // What the ledger said when this page last asked (on open, and at Test and save): { version }, or { error } with the
 // kit's e.kind: badkey, broken (a sign-in or error page instead of the ledger), offline or error (the ledger said no).
 let answer = null;
+// The ledger script these apps need: ledger/Code.gs's VERSION (test/ledger.test.mjs checks the two match). An older one
+// still answers, but the sheet it writes turns tote and pack numbers 01 to 09 into 1 to 9, so it's amber, not green.
+const WANT = '1.1';
+const older = v => {
+  const a = String(v).split('.').map(Number), b = WANT.split('.').map(Number);
+  for (let i = 0; i < b.length; i++) if ((a[i] || 0) !== b[i]) return (a[i] || 0) < b[i];
+  return false;
+};
+const OLD_FIX = 'Paste ledger/Code.gs from Switchboard\'s repo over it, Save, then Deploy, Manage deployments, the pencil, Version: New version, Deploy. Until then don\'t save totes or packs numbered 01 to 09.';
 const stateLine = e => ({ badkey: 'Wrong key — copy B2 from the sheet\'s About tab again', broken: 'The ledger isn\'t answering — check the deployment',
   error: `The ledger said no (${e.message})` })[e.kind] || 'Offline — can\'t reach the ledger';
 const failText = e => ({ badkey: 'The address answered, but the key is wrong. Copy it again from the About tab, cell B2.',
@@ -59,6 +68,7 @@ const failText = e => ({ badkey: 'The address answered, but the key is wrong. Co
 function renderLedger() {
   const st = $('#ledger-state');
   const [k, text] = !ledger.connected ? ['unset', 'Not connected to the ledger'] : !answer ? ['pending', 'Checking the ledger…']
+    : answer.version && older(answer.version) ? ['pending', `Ledger script v${answer.version} is older than these apps need (v${WANT})`]
     : answer.version ? ['synced', `Connected to ledger v${answer.version}`] : [answer.error.kind || 'offline', stateLine(answer.error)];
   st.className = 'sync ' + k; st.textContent = text;
   $('#ledger-forget').hidden = !ledger.connected;
@@ -84,7 +94,8 @@ $('#ledger-form').addEventListener('submit', async e => {
   try {
     const j = await trial.ping();
     ledger.setConfig(url, key); answer = { version: j.version }; fillFields();
-    msg.textContent = `Connected to ledger v${j.version}.`; msg.className = 'msg ok'; buzz(60);
+    if (older(j.version)) { msg.textContent = `Connected, but the script is v${j.version}. ${OLD_FIX}`; msg.className = 'msg wait'; }
+    else { msg.textContent = `Connected to ledger v${j.version}.`; msg.className = 'msg ok'; buzz(60); }
   } catch (err) {
     msg.className = 'msg bad'; msg.textContent = failText(err);
   }
