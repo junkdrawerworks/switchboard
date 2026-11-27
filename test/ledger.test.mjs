@@ -1014,3 +1014,77 @@ test('lists asked at once are taken in order: each keeps its own asked time and 
   net.hold = null; await a.flush();
   assert.equal(sheet('mothball', 'totes')['01'].name, 'Lights and timers');
 });
+
+// A page going away (the tab closed, the phone locked) sends what's waiting with fetch's keepalive, which Chromium
+// refuses for a body of 64 KiB or more: only what fits under 60,000 bytes goes that way, the rest by ordinary sends.
+async function pageWorld() {
+  const w = await world();
+  const was = { window: globalThis.window, document: globalThis.document };
+  const win = new EventTarget(), doc = new EventTarget();
+  doc.visibilityState = 'visible';
+  globalThis.window = win; globalThis.document = doc;
+  const sends = [];
+  const { Ledger } = w;
+  const open = app => {
+    const l = new Ledger(app, { fetchImpl: async (url, o) => {
+      const body = JSON.parse(o.body), bytes = new TextEncoder().encode(o.body).length;
+      sends.push({ op: body.op, n: body.ops?.length || 0, keepalive: !!o.keepalive, bytes });
+      if (o.keepalive && bytes >= 65536) throw new TypeError('Failed to fetch');   // as Chromium does
+      return { ok: true, status: 200, json: async () => post(w.g, body) };
+    } });
+    opened.push(l); l.setConfig(URL_, w.props.KEY); return l;
+  };
+  const hide = () => { doc.visibilityState = 'hidden'; doc.dispatchEvent(new Event('visibilitychange')); };
+  const restore = () => { globalThis.window = was.window; globalThis.document = was.document; };
+  return { ...w, open, sends, win, hide, restore };
+}
+
+test('the page hidden or closed sends what is waiting with keepalive; lists and ordinary sends never use it', async () => {
+  const p = await pageWorld();
+  try {
+    const a = p.open('larder');
+    a.keepUp(['items', 'queue'], () => {});
+    await a._syncing;
+    a.put('items', { id: 'rice', name: 'Rice', state: 'ok' }); a.del('queue', 'q3');
+    p.hide();                                                        // the phone locked, or Chrome swiped away
+    await a.flush();
+    const ka = p.sends.filter(s => s.keepalive);
+    assert.deepEqual(ka.map(s => [s.op, s.n]), [['batch', 2]], 'the hidden page\'s send went without keepalive');
+    a.put('items', { id: 'rice', name: 'Rice', state: 'low' });
+    p.win.dispatchEvent(new Event('pagehide'));                      // the tab closed
+    await a.flush();
+    assert.equal(p.sends.filter(s => s.keepalive).length, 2, 'pagehide sent nothing with keepalive');
+    a.put('items', { id: 'oats', name: 'Oats' }); await a.flush();   // an ordinary save, and a sync
+    await a.sync(['items', 'queue']);
+    assert.ok(p.sends.filter(s => !s.keepalive).some(s => s.op === 'batch'));
+    assert.deepEqual(p.sends.filter(s => s.keepalive).map(s => s.op), ['batch', 'batch'], 'a list or an ordinary send used keepalive');
+    assert.equal(a.pending, 0);
+    assert.equal(p.sheet('larder', 'items').rice.state, 'low');
+  } finally { p.restore(); }
+});
+
+test('a body over 64 KiB is never sent with keepalive: the first writes that fit go, the rest by ordinary sends', async () => {
+  const p = await pageWorld();
+  try {
+    const a = p.open('placard');
+    a.keepUp(['site'], () => {});
+    await a._syncing;
+    const page = n => ({ id: 'page-' + n, name: 'Page ' + n, care: 'é'.repeat(20000) });   // 40,000 bytes of UTF-8 each
+    for (let n = 1; n <= 4; n++) a.put('site', page(n));
+    a.put('site', { id: 'huge', name: 'Huge', care: 'é'.repeat(44000) });              // 88,000 bytes on its own
+    p.hide();
+    await a.flush();
+    for (let i = 0; i < 20 && a.pending; i++) { await a.flush(); await tick(); }
+    const ka = p.sends.filter(s => s.keepalive);
+    assert.ok(ka.length >= 1, 'nothing went with keepalive');
+    assert.ok(ka.every(s => s.bytes < 60000), `a keepalive body of ${Math.max(...ka.map(s => s.bytes))} bytes`);
+    assert.equal(a.pending, 0, 'what didn\'t fit was left waiting');
+    assert.deepEqual(Object.keys(p.sheet('placard', 'site')).sort(), ['huge', 'page-1', 'page-2', 'page-3', 'page-4']);
+    // a record too big for keepalive on its own goes by an ordinary send
+    a.put('site', { id: 'huge', name: 'Huge, again', care: 'é'.repeat(44000) });
+    p.win.dispatchEvent(new Event('pagehide'));
+    await a.flush();
+    assert.equal(p.sheet('placard', 'site').huge.name, 'Huge, again');
+    assert.ok(p.sends.filter(s => s.keepalive).every(s => s.bytes < 60000));
+  } finally { p.restore(); }
+});
