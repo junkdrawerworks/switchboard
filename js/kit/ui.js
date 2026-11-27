@@ -111,10 +111,15 @@ export function sheet({ title, fields = [], body = null, ok = 'Save', danger = n
 }
 
 // A press whose job waits on something first (New tote asks the ledger for the latest): the button is held until then,
-// so a second press doesn't open a second sheet.
-export async function held(btn, p) {
-  if (btn) btn.disabled = true;
-  try { return await p; } finally { if (btn) btn.disabled = false; }
+// so a second press doesn't open a second sheet, and says what it's doing ('Checking…', aria-busy) at its own width.
+export async function held(btn, p, busy = 'Checking…') {
+  if (!btn) return p;
+  const kids = [...btn.childNodes], width = btn.style.minWidth;
+  btn.style.minWidth = btn.getBoundingClientRect().width + 'px';
+  btn.disabled = true; btn.textContent = busy; btn.setAttribute('aria-busy', 'true');
+  try { return await p; } finally {
+    btn.disabled = false; btn.replaceChildren(...kids); btn.style.minWidth = width; btn.removeAttribute('aria-busy');
+  }
 }
 
 export function confirmSheet(title, text, ok = 'OK') {

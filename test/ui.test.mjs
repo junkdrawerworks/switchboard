@@ -181,3 +181,21 @@ test('a sheet is named by its title, which takes the focus on a touch screen so 
     p.button('Cancel').dispatchEvent(new Event('click'));
   }
 });
+
+test('a button held while the app asks the ledger says so, keeps its width, and comes back as it was', async () => {
+  fakePage();
+  const { held, h } = await import('../js/kit/ui.js');
+  const btn = h('button', { type: 'button', class: 'btn' }, 'New tote');
+  btn.width = 112;
+  let answer;
+  const p = held(btn, new Promise(r => { answer = r; }));
+  assert.deepEqual([btn.textContent, btn.disabled, btn.getAttribute('aria-busy'), btn.style.minWidth], ['Checking…', true, 'true', '112px']);
+  answer('ok');
+  assert.equal(await p, 'ok');
+  assert.deepEqual([btn.textContent, btn.disabled, btn.getAttribute('aria-busy'), btn.style.minWidth || ''], ['New tote', false, null, '']);
+  // a wait that fails gives the button back too, and a label of the app's own
+  const q = held(btn, Promise.reject(new Error('no answer')), 'Asking…');
+  assert.equal(btn.textContent, 'Asking…');
+  await assert.rejects(q);
+  assert.deepEqual([btn.textContent, btn.disabled], ['New tote', false]);
+});
