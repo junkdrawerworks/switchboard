@@ -97,9 +97,20 @@ export function ageText(day, now = new Date()) {
   const y = m / 12;
   return `${y.toFixed(y < 10 && m % 12 ? 1 : 0)} yr`;
 }
+// How long ago, in words that read right from the first day: 'today', 'yesterday', '3 days ago', '5 wk ago', '14 mo ago'.
+// (ageText alone gives 'today' under a day, so 'packed ' + ageText + ' ago' read "packed today ago".)
+export function agoText(day, now = new Date()) {
+  const d = daysSince(day, now);
+  if (d == null) return '';
+  return d < 1 ? 'today' : d === 1 ? 'yesterday' : `${ageText(day, now)} ago`;
+}
 const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 export function dayText(day) { if (!day) return ''; const d = parseDay(day); return `${MON[d.getMonth()]} ${d.getDate()}, ${d.getFullYear()}`; }
-export function stampText(ms) { const d = new Date(ms); return `${MON[d.getMonth()]} ${d.getDate()}, ${d.getHours() % 12 || 12}:${String(d.getMinutes()).padStart(2, '0')} ${d.getHours() < 12 ? 'am' : 'pm'}`; }
+// A moment as 'Nov 27, 6:05 pm', with the year when it isn't this year ('Dec 9, 2025, 6:00 pm').
+export function stampText(ms, now = new Date()) {
+  const d = new Date(ms), year = d.getFullYear() === now.getFullYear() ? '' : `, ${d.getFullYear()}`;
+  return `${MON[d.getMonth()]} ${d.getDate()}${year}, ${d.getHours() % 12 || 12}:${String(d.getMinutes()).padStart(2, '0')} ${d.getHours() < 12 ? 'am' : 'pm'}`;
+}
 
 // ---- the address: #<id> is an item, #/<view> is a screen
 export function route(hash = location.hash) {
