@@ -206,8 +206,10 @@ test('only a real report counts towards the hour', () => {
 test('a report says whether the email went: at most 20 a day, never past Google\'s quota, and kept either way', () => {
   const { g, props, mail } = fakeGoogle();
   g.setup();
-  const RealDate = Date;
-  let shift = 0;                                      // the pretend Google's clock, moved on a day below
+  const RealDate = Date, d = new RealDate();
+  // the pretend Google's clock, moved on a day below; it starts at 10:00 UTC today, so the two hours of reports stay in
+  // one day (the day's cap counts UTC days: run after 23:00 UTC, the hour's shift crossed into the next one)
+  let shift = RealDate.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), 10) - RealDate.now();
   g.Date = class extends RealDate { constructor(...a) { super(...(a.length ? a : [RealDate.now() + shift])); } static now() { return RealDate.now() + shift; } };
   const send = (text = 'Drip') => post(g, { op: 'report', app: 'placard', coll: 'reports', doc: { text } });
   const kept = () => post(g, { key: props.KEY, op: 'list', app: 'placard', coll: 'reports', since: 0 }).docs.length;
