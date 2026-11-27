@@ -406,6 +406,29 @@ test('a list answer read before a save does not put the old copy back after the 
   assert.equal(a.doc('items', 'cumin').state, 'out', 'the screen must keep the saved state');
 });
 
+test('a list asked for while a save was still waiting, and answered after the save went, does not put the old copy back', async t => {
+  const { net, open, sheet, g, props } = await world();
+  post(g, { key: props.KEY, op: 'put', app: 'larder', coll: 'items', id: 'cumin', doc: { name: 'Cumin', state: 'ok' } });
+  const a = open('larder');
+  await a.sync(['items']);
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: Date.now() });
+  let release;
+  net.hold = b => (b.op === 'list' ? new Promise(r => { release = r; }) : null);
+  const syncing = a.sync(['items']);                               // nothing to send: it goes on to the list
+  a.put('items', { ...a.doc('items', 'cumin'), state: 'out' });    // a save made just before the list is asked for
+  t.mock.timers.tick(10);
+  await tick();                                                    // the list is asked for, the save still waiting
+  const readEarly = JSON.stringify(post(g, { key: props.KEY, op: 'list', app: 'larder', coll: 'items', since: 0 }));
+  net.hold = null;
+  await a.flush();                                                 // the save goes, and is answered first
+  assert.equal(a.pending, 0);
+  release(readEarly);                                              // then the list, as Google read it before the save
+  await syncing;
+  assert.ok(readEarly.includes('"state":"ok"'));
+  assert.equal(sheet('larder', 'items').cumin.state, 'out');
+  assert.equal(a.doc('items', 'cumin').state, 'out', 'the screen must keep the saved state');
+});
+
 test('two tabs of one app on one phone never drop each other\'s waiting changes', async () => {
   const { net, open } = await world();
   const a = open();
