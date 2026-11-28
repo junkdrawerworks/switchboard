@@ -34,8 +34,6 @@ GitHub Pages serves it from `main`, `/ (root)`, at its own address (`CNAME`).
 - `404.html`: the resolver.
 - `ledger/Code.gs`: the ledger web app.
 - `js/kit/`, `css/kit.css`: the kit every tag app shares: ledger client, Web NFC, small UI helpers.
-- `test/`: the ledger round trip against a pretend Google Sheet, the resolver, and the page in Chromium.
-
 - `fonts/`: Barlow, Barlow Condensed and JetBrains Mono (SIL Open Font License), served from here so nothing loads from elsewhere.
-- `test/e2e.mjs`, `test/app-checks.mjs`: the page in Chromium, offline included.
+- `test/`: the ledger round trip against a pretend Google Sheet, the resolver, and the page in Chromium (`test/e2e.mjs`, `test/app-checks.mjs`), offline included.
 
