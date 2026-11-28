@@ -1174,7 +1174,7 @@ test('a deleted record keeps its json, every reader leaves it out, and FALSE in 
   post(g, { key, op: 'put', app: 'larder', coll: 'queue', id: 'q1', doc: { item: 'rice', text: 'Rice', synced: false } });
   post(g, { key, op: 'del', app: 'larder', coll: 'queue', id: 'q1' });
   const pull = post(g, { key, op: 'list', app: 'larder', coll: 'queue', since: 0, match: { synced: false } }).docs;
-  assert.deepEqual(pull.map(d => [d.id, d._deleted, d.text]), [['q1', true, 'Rice']], 'a deleted entry must come with _deleted, which Home Assistant skips');
+  assert.deepEqual(pull.map(d => [d.id, d._deleted, d.text]), [['q1', true, undefined]], 'a deleted entry must come with _deleted, which Home Assistant skips');
   // FALSE typed into its deleted cell: onEdit stamps it, and the page is back on the phone and the tenants' pages
   s.data.find(r => r[0] === 'well-pump')[2] = false;
   g.onEdit({ range: s.getRange(s.data.findIndex(r => r[0] === 'well-pump') + 1, 3) });
@@ -1182,6 +1182,28 @@ test('a deleted record keeps its json, every reader leaves it out, and FALSE in 
   await phone.sync(['site']);
   assert.equal(phone.doc('site', 'well-pump')?.where, 'Basement, north wall', 'FALSE in the deleted cell didn\'t bring the page back');
   assert.deepEqual(get(g, { op: 'pub', app: 'placard', coll: 'site' }).docs.map(d => d.id).sort(), ['house', 'well-pump']);
+});
+
+test('a list with match (Home Assistant\'s pull, Pinch\'s look) sends a deleted entry as its id alone, so the tab\'s taken-back entries don\'t triple its size; the apps\' list keeps the json', () => {
+  const { g, props } = fakeGoogle();
+  g.setup();
+  ticking(g);
+  const key = props.KEY;
+  for (let i = 0; i < 200; i++) {
+    post(g, { key, op: 'put', app: 'larder', coll: 'queue', id: 'q' + i, doc: { item: 'rice', text: 'Rice, 5 lb bag (basmati)', why: 'out', at: 1764200000000 + i, synced: true } });
+    post(g, { key, op: 'del', app: 'larder', coll: 'queue', id: 'q' + i });
+  }
+  post(g, { key, op: 'put', app: 'larder', coll: 'queue', id: 'live', doc: { item: 'rice', text: 'Rice', why: 'pinch', at: 1764300000000, synced: false } });
+  const list = match => post(g, { key, op: 'list', app: 'larder', coll: 'queue', since: 0, ...(match ? { match } : {}) });
+  for (const match of [{ synced: false }, { item: 'rice' }]) {
+    const docs = list(match).docs, gone = docs.find(d => d.id === 'q7');
+    assert.deepEqual(Object.keys(gone).sort(), ['_deleted', '_updated', 'id'], `a deleted entry came with its json (match ${JSON.stringify(match)})`);
+    assert.equal(gone._deleted, true);
+    assert.equal(docs.find(d => d.id === 'live').text, 'Rice');
+    assert.ok(JSON.stringify(list(match)).length < JSON.stringify(list(null)).length / 2, 'the answer is as big as the whole tab');
+  }
+  // the apps' own list: the json stays, so FALSE in the deleted cell (and Larder's take-back check) has it
+  assert.equal(list(null).docs.find(d => d.id === 'q7').text, 'Rice, 5 lb bag (basmati)');
 });
 
 test('a put naming the version it is for (ifUpdated) is made only on that version: Home Assistant\'s mark never brings back a taken-back entry', () => {

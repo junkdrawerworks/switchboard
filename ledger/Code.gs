@@ -189,6 +189,9 @@ function newest(rs) {
   });
   return order.map(function (id) { return by[id]; });
 }
+// A list with match (Home Assistant's pull, Pinch's look at the shopping list) sends a deleted record as its id alone, as
+// version 1.0 did: both only skip it, and both fetch the whole tab each time, which keeps every entry ever taken off
+// the list, so its json would make each answer about three times the size. The apps' own lists carry it.
 function list(name, since, match) {
   const s = tab(name, false);
   if (!s) return [];
@@ -196,7 +199,7 @@ function list(name, since, match) {
     if (!match || d._deleted) return true;
     for (const k in match) if (d[k] !== match[k]) return false;
     return true;
-  });
+  }).map(function (d) { return match && d._deleted ? { id: d.id, _updated: d._updated, _deleted: true } : d; });
 }
 function getDoc(name, id) {
   const s = tab(name, false);
