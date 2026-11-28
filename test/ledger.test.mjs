@@ -1132,6 +1132,35 @@ test('a put naming the version it is for (ifUpdated) is made only on that versio
   assert.deepEqual([one.ok, one.skipped], [true, true]);
 });
 
+test('a write sent again after its answer was lost is not applied twice (Home Assistant\'s mark stays)', () => {
+  const { g, props, sheets } = fakeGoogle();
+  g.setup();
+  const entry = { op: 'put', app: 'larder', coll: 'queue', id: 'q7x2ab', doc: { item: 'cumin', text: 'Cumin', synced: false }, q: 'mic3x0g0abcde' };
+  post(g, { key: props.KEY, op: 'batch', ops: [entry] });
+  post(g, { key: props.KEY, op: 'batch', ops: [{ op: 'put', app: 'larder', coll: 'queue', id: 'q7x2ab', doc: { item: 'cumin', text: 'Cumin', synced: true } }] });
+  const again = post(g, { key: props.KEY, op: 'batch', ops: [entry] });
+  assert.equal(again.results[0].again, true);
+  assert.equal(post(g, { key: props.KEY, op: 'list', app: 'larder', coll: 'queue', since: 0, match: { synced: false } }).docs.length, 0, 'Home Assistant would add Cumin again');
+  const other = { ...entry, q: 'mic3x0g1fghij', doc: { ...entry.doc, text: 'Cumin, 2 oz' } };
+  post(g, { key: props.KEY, op: 'batch', ops: [other] });
+  assert.equal(JSON.parse(sheets['larder.queue'].data[1][3]).text, 'Cumin, 2 oz');
+  // a delete sent again doesn't take away the tote another device made since under the same number
+  const del = { op: 'del', app: 'mothball', coll: 'totes', id: '03', q: 'mic3x0g2klmno' };
+  post(g, { key: props.KEY, op: 'put', app: 'mothball', coll: 'totes', id: '03', doc: { name: 'Lights' } });
+  post(g, { key: props.KEY, op: 'batch', ops: [del] });
+  post(g, { key: props.KEY, op: 'batch', ops: [{ op: 'put', app: 'mothball', coll: 'totes', id: '03', doc: { name: 'Halloween' }, q: 'mic3x0g3pqrst' }] });
+  post(g, { key: props.KEY, op: 'batch', ops: [del] });
+  assert.equal(post(g, { key: props.KEY, op: 'get', app: 'mothball', coll: 'totes', id: '03' }).doc._deleted, undefined, 'the repeated delete wiped the new tote 03');
+  // writes without a stamp (Home Assistant, Pinch, Cellmate) are always made; only the last 500 stamps are kept, and
+  // one that isn't a stamp the apps make is never kept
+  for (let i = 0; i < 520; i++) post(g, { key: props.KEY, op: 'batch', ops: [{ op: 'put', app: 'larder', coll: 'items', id: 'i' + (i % 3), doc: { n: i }, q: 'zz' + i.toString(36).padStart(11, '0') }] });
+  const kept = props.APPLIED.split(' ');
+  assert.equal(kept.length, 500);
+  assert.ok(props.APPLIED.length < 9000, `${props.APPLIED.length} characters: over Google's 9 KB a property`);
+  post(g, { key: props.KEY, op: 'batch', ops: [{ op: 'put', app: 'larder', coll: 'items', id: 'odd', doc: {}, q: 'x'.repeat(200) }] });
+  assert.ok(!props.APPLIED.includes('xxxx'), 'a long stamp was kept');
+});
+
 test('an add sent twice with the same id (a retry) keeps one row and does not undo later changes', { todo: 'add with an id overwrites; Pinch and Cellmate send no id' }, async () => {
   const { g, props, sheets } = await world();
   const add = () => post(g, { key: props.KEY, op: 'add', app: 'larder', coll: 'queue', doc: { id: 'pinch-cumin-2026-09-01', item: 'cumin', synced: false } });

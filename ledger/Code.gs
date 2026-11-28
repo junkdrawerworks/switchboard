@@ -77,7 +77,7 @@ function handle(q) {
       case 'add': return locked(function () { return write({ op: 'add', app: q.app, coll: q.coll, doc: q.doc }); });
       case 'batch':
         if (!Array.isArray(q.ops) || q.ops.length > 100) return { ok: false, error: 'batch needs 1-100 ops' };
-        return locked(function () { return { ok: true, results: q.ops.map(write) }; });
+        return locked(function () { return batch(q.ops); });
       default: return { ok: false, error: 'unknown op ' + op };
     }
   } catch (err) {
@@ -88,6 +88,26 @@ function handle(q) {
 // A page as anyone may read it: not when its sticker was written or locked, nor when it last changed (the owner's list
 // has those; the tenants' pages use none of them).
 function shown(d) { const o = Object.assign({}, d); delete o.tagged; delete o.locked; delete o._updated; return o; }
+// A batch from an app. Each of the apps' writes carries its own stamp q: one already made here (a write sent again,
+// since its answer never reached the page: a tab closed while it was on its way, or Android dropped it) isn't made a
+// second time, after Home Assistant or another device has acted on the first, and answers again: true. The last 500
+// stamps are kept in the script's properties (up to 14 characters each, under Google's 9 KB a value). Writes without
+// one (Home Assistant, Pinch, Cellmate) are always made.
+function batch(ops) {
+  const props = PropertiesService.getScriptProperties(), seen = String(props.getProperty('APPLIED') || '').split(' ').filter(String), had = seen.length;
+  const stamp = function (o) { return o && typeof o.q === 'string' && /^[a-z0-9]{6,14}$/.test(o.q) ? o.q : ''; };
+  try {
+    return { ok: true, results: ops.map(function (o) {
+      const q = stamp(o);
+      if (q && seen.indexOf(q) >= 0) return { ok: true, id: String(o.id), again: true };
+      const r = write(o);
+      if (q) seen.push(q);
+      return r;
+    }) };
+  } finally {
+    if (seen.length > had) try { props.setProperty('APPLIED', seen.slice(-500).join(' ')); } catch (e) { /* the writes stand */ }
+  }
+}
 function checkName(name) {
   if (!TAB.test(name)) throw new Error('bad app or coll');
   return name;
