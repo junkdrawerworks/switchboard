@@ -1,10 +1,13 @@
-import { $, h, mount, toast, buzz, confirmSheet } from './kit/ui.js';
+import { $, h, mount, toast, buzz, confirmSheet, qrSvg, loadQr } from './kit/ui.js';
 import { APPS, parseTag, resolve, tagUrl } from './kit/tags.js';
-import { Ledger, connectLink } from './kit/ledger.js';
+import { Ledger, connectLink, watchConnectLinks } from './kit/ledger.js';
 import { readOnce, explainNfc, nfcSupported, cancelNfc } from './kit/nfc.js';
 import { nfcPanel } from './kit/panel.js';
 import { readOverrides, overridesWork, resolverWorks } from './overrides.js';
 
+// Switchboard's own connect link (Another device, scanned on a second phone or tablet) sets up its ledger here as each
+// app's does there: taken before the ledger is made, and the key isn't left in the address.
+watchConnectLinks('switchboard', toast);
 const ledger = new Ledger('switchboard');
 const appOrder = ['h', 't', 'p', 'f', 'm'];
 const blurb = { h: 'The rental house manual', t: 'Seasonal totes', p: 'Consumables and spices', f: 'The freezer', m: 'Makita packs' };
@@ -85,6 +88,7 @@ function renderLedger() {
   st.className = 'sync ' + k; st.textContent = text;
   $('#ledger-forget').hidden = !ledger.connected;
   renderApps();
+  renderAnother();
 }
 // The saved address and key in the boxes: at load and after Test and save, never under someone typing a new key.
 const fillFields = () => { $('#lurl').value = ledger.cfg.url || ''; $('#lkey').value = ledger.cfg.key || ''; };
@@ -120,6 +124,31 @@ $('#ledger-forget').addEventListener('click', async () => {
   ledger.forget(); answer = null; fillFields(); renderLedger();
   toast('Forgotten on this device.');
 });
+
+// ---- another device
+// Switchboard's own connect link as a QR code: the other phone or tablet's camera opens it, its Switchboard is set up
+// with the address and key (watchConnectLinks), and each app is connected from there as here. The code carries the
+// key, so it's drawn only when asked, and goes when hidden, when this page is left, and when the ledger is forgotten
+// or its key turned down.
+let showing = false;
+async function renderAnother() {
+  const can = ledger.connected && answer?.error?.kind !== 'badkey';
+  if (!can) showing = false;
+  $('#another').hidden = !can;
+  const btn = $('#another-btn'), box = $('#another-qr');
+  btn.textContent = showing ? 'Hide the code' : 'Another device';
+  btn.setAttribute('aria-expanded', String(showing));
+  $('#another-code').hidden = !showing;
+  if (!showing) { box.replaceChildren(); delete box.dataset.url; return; }
+  const link = connectLink(APPS.s.base, ledger.cfg.url, ledger.cfg.key);
+  if (box.dataset.url === link) return;
+  try { await loadQr(); } catch { mount(box, h('p', { class: 'msg bad' }, 'The code didn\'t load. Reload the page to try again.')); return; }
+  if (!showing || !ledger.connected) return;
+  box.dataset.url = link;
+  box.innerHTML = qrSvg(link, { size: 260, margin: 4 });
+}
+$('#another-btn').addEventListener('click', () => { showing = !showing; renderAnother(); });
+document.addEventListener('visibilitychange', () => { if (document.hidden && showing) { showing = false; renderAnother(); } });
 
 // A key the ledger turned down when Switchboard opened (setup run again in the sheet) would go to each app in its Connect
 // link and be turned down there too, so the rows wait for the new one instead.

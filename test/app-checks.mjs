@@ -274,6 +274,48 @@ async function writeOver({ page, assert }) {
   await page.evaluate(() => { window.__nfc.sticker = null; });
 }
 
+// Another device: Switchboard's own connect link as a QR code, drawn only when asked (it carries the key), hidden again
+// by its button or when the page is left; opened on a second phone, that phone's Switchboard is set up with it.
+async function anotherDevice({ page, base, assert }) {
+  const U = 'https://script.google.com/macros/s/AKfyTEST/exec', K = 'k'.repeat(40);
+  assert.equal(await page.locator('#another').isVisible(), true, 'no Another device once connected');
+  assert.deepEqual([await page.locator('#another-btn').textContent(), await page.locator('#another-code').isHidden(), await page.locator('#another-qr svg').count()],
+    ['Another device', true, 0], 'the code is drawn before it was asked for');
+  await page.click('#another-btn');
+  await page.waitForSelector('#another-qr svg');
+  const link = await page.locator('#another-qr').getAttribute('data-url');
+  assert.match(link, /^https:\/\/tag\.junkdrawer\.works\/#connect=[A-Za-z0-9_-]+$/);
+  assert.deepEqual(JSON.parse(Buffer.from(link.split('=')[1].replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString()), { u: U, k: K });
+  // the code is that link: the same one the kit's QR maker draws for it
+  assert.ok(await page.locator('#another-qr').evaluate(async (el, u) => { const d = document.createElement('div'); d.innerHTML = (await import('./js/kit/ui.js')).qrSvg(u, { size: 260, margin: 4 }); return d.innerHTML === el.innerHTML; }, link),
+    'the code drawn isn\'t the QR code of the link');
+  assert.deepEqual([await page.locator('#another-btn').textContent(), await page.locator('#another-btn').getAttribute('aria-expanded')], ['Hide the code', 'true']);
+  assert.match(await page.locator('#another-code .msg.wait').textContent(), /^This code carries the ledger key/);
+  // big enough for a camera, and inside the card on a phone
+  const box = await page.locator('#another-qr svg').evaluate(el => { const r = el.getBoundingClientRect(), c = el.closest('.card').getBoundingClientRect(); return [Math.round(r.width), r.right <= c.right]; });
+  assert.deepEqual(box, [260, true]);
+  await page.click('#another-btn');
+  assert.deepEqual([await page.locator('#another-qr svg').count(), await page.locator('#another-code').isHidden(), await page.locator('#another-btn').textContent()], [0, true, 'Another device']);
+  // left on screen and the page left (another app, the phone locked): gone when it comes back
+  await page.click('#another-btn');
+  await page.waitForSelector('#another-qr svg');
+  await page.evaluate(() => { Object.defineProperty(document, 'hidden', { value: true, configurable: true }); document.dispatchEvent(new Event('visibilitychange')); delete document.hidden; });
+  assert.equal(await page.locator('#another-qr svg').count(), 0, 'the code stayed after the page was left');
+  // the second phone: its camera opens the link, and its Switchboard is set up, with the key out of the address
+  const other = await page.context().browser().newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true });
+  try {
+    await other.route('https://script.google.com/**', r => r.fulfill({ contentType: 'application/json',
+      body: JSON.stringify(JSON.parse(r.request().postData() || '{}').key === K ? { ok: true, version: '1.1', time: 1 } : { ok: false, error: 'bad key' }) }));
+    const p2 = await other.newPage();
+    await p2.goto(base + link.slice(link.indexOf('#')));
+    await p2.waitForFunction(() => document.querySelector('#ledger-state').textContent === 'Connected to ledger v1.1');
+    assert.deepEqual([await p2.inputValue('#lurl'), await p2.inputValue('#lkey')], [U, K], 'the second phone\'s Switchboard wasn\'t set up');
+    assert.equal(new URL(p2.url()).hash, '', 'the key was left in the address');
+    assert.equal(await p2.locator('#toast').textContent(), 'Connected to your ledger.');
+    assert.match(await p2.locator('#app-list a').first().getAttribute('href'), /^https:\/\/placard\.junkdrawer\.works\/#connect=/, 'no Connect on the second phone');
+  } finally { await other.close(); }
+}
+
 // Installed on Android, an app opens every address inside its scope in its own window. Switchboard's scope is its page
 // alone, so a sticker's address (/h/water-heater, on the same origin) opens the resolver in the browser as on any other
 // phone. Chrome reads the manifest without errors (a scope that doesn't hold start_url is ignored, with an error), it can
@@ -344,6 +386,7 @@ export async function appChecks({ page, ctx, base, assert, problems }) {
   await page.waitForFunction(() => /Connected to ledger v1.1/.test(document.querySelector('#ledger-msg').textContent));
   assert.deepEqual(await state(), ['sync synced', 'Connected to ledger v1.1']);
   assert.equal(await page.locator('#ledger-msg').getAttribute('class'), 'msg ok');
+  await anotherDevice({ page, base, assert });
   // the first zip's script (1.0) answers too, but turns tote 01 into 1: amber, and how to paste the new one
   version = '1.0';
   await page.click('#ledger-test');
@@ -372,6 +415,7 @@ export async function appChecks({ page, ctx, base, assert, problems }) {
   assert.deepEqual(await page.locator('#app-list .meta').allTextContents(), Array(5).fill('fix the key first'));
   assert.equal(await page.locator('#apps-msg').textContent(), 'The key here is out of date. Paste the new one from the sheet\'s About tab (B2), then Test and save.');
   assert.equal(await page.locator('#apps-msg').isVisible(), true);
+  assert.equal(await page.locator('#another').isHidden(), true, 'Another device offered with a key the ledger turned down');
   // a new key typed while it was asking isn't put back by the answer
   google = 'down';
   await page.reload();
@@ -403,6 +447,7 @@ export async function appChecks({ page, ctx, base, assert, problems }) {
   await page.waitForSelector('.toast.show >> text=Forgotten on this device.');
   assert.deepEqual(await state(), ['sync unset', 'Not connected to the ledger']);
   assert.equal(await page.inputValue('#lurl'), '');
+  assert.equal(await page.locator('#another').isHidden(), true, 'Another device offered after Forget');
   await page.unroute('https://script.google.com/**');
   for (let i = problems.length - 1; i >= from; i--) if (/script\.google\.com|Failed to load resource: net::ERR_INTERNET_DISCONNECTED/.test(problems[i])) problems.splice(i, 1);
 }

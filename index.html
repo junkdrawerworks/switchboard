@@ -47,6 +47,14 @@
       <div class="btns"><button type="submit" class="btn" id="ledger-test">Test and save</button><button type="button" class="btn ghost" id="ledger-forget">Forget</button></div>
     </form>
     <p class="msg" id="ledger-msg" aria-live="polite"></p>
+    <div id="another" hidden>
+      <div class="btns"><button type="button" class="btn ghost" id="another-btn" aria-expanded="false" aria-controls="another-code">Another device</button></div>
+      <div id="another-code" hidden>
+        <p class="msg wait">This code carries the ledger key: whoever scans it can read and change everything in the sheet. Show it only to your own phone or tablet, then hide it.</p>
+        <div class="qr" id="another-qr" role="img" aria-label="QR code of Switchboard's link with the ledger address and key"></div>
+        <p class="muted">On the other phone or tablet, point the camera at it and open the link: Switchboard opens there with the address and key filled in. Then press Connect beside each app on that device.</p>
+      </div>
+    </div>
   </section>
 
   <section class="card" id="apps">

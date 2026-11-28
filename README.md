@@ -12,9 +12,9 @@
 
 - **The resolver.** `404.html` answers every tag address (GitHub Pages serves it for any path it doesn't have) and forwards the phone to `https://<app>.junkdrawer.works/#<id>`. `OVERRIDES`, a small script of its own at the top of the same file, sends single tags elsewhere. A mistake typed into it (a comma left out, a curly quote) loses only those: every sticker still opens its own app.
 - **The ledger.** `ledger/Code.gs` is a Google Apps Script for a Google Sheet you own: each tab is one app's collection, each row a record. The apps, a Raspberry Pi and ESP32 boards all read and write it with one key. Only the house manual's pages are readable without the key.
-- **Connect.** Each app lives at its own address, so each needs the ledger once. Switchboard makes a link per app that carries the address and key and opens the app with them filled in.
+- **Connect.** Each app lives at its own address, so each needs the ledger once. Switchboard makes a link per app that carries the address and key and opens the app with them filled in. **Another device**, under the ledger, shows Switchboard's own link as a QR code, so a second phone or tablet is set up with one scan; it carries the key, so it's drawn only when asked.
 - **Check a tag.** Hold any sticker to the phone to see which app it belongs to and where it goes, `OVERRIDES` included. It also says when a mistake typed into `OVERRIDES` means no sticker is sent elsewhere, or when one in the rest of `404.html` stops every tap. Web NFC needs Chrome on Android.
-- **Offline.** Any phone that has tapped one sticker online keeps a copy of the resolver (about 160 KB, fetched in the background on that first tap), so a later tap with no signal, or on one bar that never answers, still reaches the app's offline copy within a few seconds.
+- **Offline.** Any phone that has tapped one sticker online keeps a copy of the resolver (about 250 KB, fetched in the background on that first tap), so a later tap with no signal, or on one bar that never answers, still reaches the app's offline copy within a few seconds.
 
 ## Running it
 
@@ -33,7 +33,7 @@ GitHub Pages serves it from `main`, `/ (root)`, at its own address (`CNAME`).
 - `index.html`, `css/app.css`, `js/app.js`: the Switchboard page; `js/overrides.js` reads `404.html`'s two scripts as the page runs them, so Check a tag shows where a tap really goes.
 - `404.html`: the resolver.
 - `ledger/Code.gs`: the ledger web app.
-- `js/kit/`, `css/kit.css`: the kit every tag app shares: ledger client, Web NFC, small UI helpers.
+- `js/kit/`, `css/kit.css`: the kit every tag app shares: ledger client, Web NFC, small UI helpers, and the QR code maker Another device uses.
 - `fonts/`: Barlow, Barlow Condensed and JetBrains Mono (SIL Open Font License), served from here so nothing loads from elsewhere.
 - `test/`: the ledger round trip against a pretend Google Sheet, the resolver, and the page in Chromium (`test/e2e.mjs`, `test/app-checks.mjs`), offline included.
 
