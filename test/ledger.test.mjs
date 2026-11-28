@@ -1421,6 +1421,15 @@ test('the tabs the script made are kept as it makes them, setup adds the sheet\'
   assert.equal(post(g, { key, op: 'list', app: 'placard', coll: 'reports', since: 0 }).docs.length, 1);
 });
 
+test('with "Reports go to" (B3) emptied after setup, a report is kept and says it wasn\'t emailed, and nothing is sent', () => {
+  const { g, props, sheets, mail } = fakeGoogle();
+  g.setup();
+  sheets.About.data[2][1] = '';
+  assert.deepEqual(post(g, { op: 'report', app: 'placard', coll: 'reports', doc: { text: 'No hot water', contact: '555-0101' } }), { ok: true, emailed: false });
+  assert.equal(mail.length, 0, 'an email was sent to no address');
+  assert.deepEqual(post(g, { key: props.KEY, op: 'list', app: 'placard', coll: 'reports', since: 0 }).docs.map(d => [d.text, d.emailed]), [['No hot water', false]]);
+});
+
 test('the house manual\'s tab renamed or deleted: a tenant\'s read fails (so the phone keeps its copy); a manual not started yet reads as empty', () => {
   const { g, props, sheets } = fakeGoogle();
   g.setup();
