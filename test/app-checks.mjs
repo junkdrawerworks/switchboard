@@ -643,6 +643,8 @@ export async function appChecks({ page, ctx, base, assert, problems }) {
   assert.match(await page.locator('#app-list a').first().getAttribute('href'), /#connect=/, 'Connect went away with an old script');
   await page.reload();
   await page.waitForFunction(() => document.querySelector('#ledger-state').textContent === 'Ledger script v1.0 is older than these apps need (v1.1)');
+  // the reload starts connected, so Setup starts folded: only the older script opens it, to show that line
+  assert.equal(await page.locator('#setup').evaluate(d => d.open), true, 'Setup stayed folded with an older script');
   version = '1.1';
   const link = await page.locator('#app-list a').first().getAttribute('href');
   assert.match(link, /^https:\/\/placard\.junkdrawer\.works\/#connect=[A-Za-z0-9_-]+$/);
