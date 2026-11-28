@@ -81,6 +81,8 @@ function fakeGoogle() {
 }
 
 const post = (g, body) => JSON.parse(g.doPost({ postData: { contents: JSON.stringify(body) } }).text);
+// The pretend Google's clock moved on a millisecond at each look, so two writes in one test never share a time.
+const ticking = g => { const RealDate = Date; let t = RealDate.now(); g.Date = class extends RealDate { constructor(...a) { super(...(a.length ? a : [t])); } static now() { return ++t; } }; };
 const get = (g, q) => JSON.parse(g.doGet({ parameter: q }).text);
 
 test('setup writes a key on the About tab, and ping works with and without it', () => {
@@ -901,8 +903,8 @@ test('a json cell changed by hand reaches a phone that has already synced, and t
 });
 
 test('after an earlier version of the sheet is restored, Ledger, Send everything to the phones again brings it to a synced phone', async () => {
-  const { g, props, sheets, open, ui, locks } = await world();
-  const key = props.KEY;
+  const { g, sheets, open, ui, locks } = await world();
+  ticking(g);
   g.onOpen();
   assert.deepEqual(ui.menus.map(m => [m.name, m.items]), [['Ledger', [['Send everything to the phones again', 'sendAgain']]]]);
   const phone = open('frostbite');
@@ -911,6 +913,7 @@ test('after an earlier version of the sheet is restored, Ledger, Send everything
   for (const t of [s, sheets['frostbite.zones']]) t.data[1][1] -= 3600e3;   // saved an hour ago
   const was = structuredClone(s.data);                                      // the version from before a mistake
   phone.put('items', { id: 'stew', name: 'Beef stew', qty: 0 }); phone.put('items', { id: 'peas', name: 'Peas' }); await phone.flush();
+  await new Promise(r => setTimeout(r, 5));                       // a sync a moment after the phone's own change
   await phone.sync(['items', 'zones']);
   // File, Version history, restore: the rows go back as they were, their updated times too
   s.data.splice(0, s.data.length, ...structuredClone(was));
@@ -940,6 +943,7 @@ test('after an earlier version of the sheet is restored, Ledger, Send everything
 test('a deleted record keeps its json, every reader leaves it out, and FALSE in its deleted cell brings it back', async () => {
   const { g, props, sheets, open } = await world();
   const key = props.KEY;
+  ticking(g);
   const phone = open('placard');
   phone.put('site', { id: 'well-pump', name: 'Well pump', where: 'Basement, north wall' }); phone.put('site', { id: 'house', title: 'House manual' });
   await phone.flush();
@@ -965,6 +969,7 @@ test('a deleted record keeps its json, every reader leaves it out, and FALSE in 
   // FALSE typed into its deleted cell: onEdit stamps it, and the page is back on the phone and the tenants' pages
   s.data.find(r => r[0] === 'well-pump')[2] = false;
   g.onEdit({ range: s.getRange(s.data.findIndex(r => r[0] === 'well-pump') + 1, 3) });
+  await new Promise(r => setTimeout(r, 5));                       // a moment after the phone's own delete
   await phone.sync(['site']);
   assert.equal(phone.doc('site', 'well-pump')?.where, 'Basement, north wall', 'FALSE in the deleted cell didn\'t bring the page back');
   assert.deepEqual(get(g, { op: 'pub', app: 'placard', coll: 'site' }).docs.map(d => d.id).sort(), ['house', 'well-pump']);
