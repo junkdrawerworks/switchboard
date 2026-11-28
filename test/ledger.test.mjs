@@ -118,6 +118,19 @@ test('setup run again keeps the addresses reports go to, and says more than one 
   assert.equal(sheets.About.data[2][1], 'owner@example.com');
 });
 
+test('a list of a tab that isn\'t in the sheet (deleted or renamed by hand) says so', () => {
+  const { g, props, sheets } = fakeGoogle();
+  g.setup();
+  const key = props.KEY;
+  assert.deepEqual(post(g, { key, op: 'list', app: 'larder', coll: 'items', since: 0 }).none, true);
+  post(g, { key, op: 'put', app: 'larder', coll: 'items', id: 'cumin', doc: { name: 'Cumin' } });
+  const l = post(g, { key, op: 'list', app: 'larder', coll: 'items', since: 0 });
+  assert.deepEqual([l.none, l.docs.length], [undefined, 1]);
+  // a tab emptied but still there is a real empty list
+  sheets['larder.items'].data.splice(1);
+  assert.deepEqual([post(g, { key, op: 'list', app: 'larder', coll: 'items', since: 0 }).none, post(g, { key, op: 'list', app: 'larder', coll: 'items', since: 0 }).docs.length], [undefined, 0]);
+});
+
 test('put, list since, replace, delete and batch', () => {
   const { g, props } = fakeGoogle();
   g.setup();

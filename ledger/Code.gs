@@ -70,7 +70,8 @@ function handle(q) {
     if (!key || q.key !== key) return { ok: false, error: 'bad key' };
     switch (op) {
       case 'ping': return { ok: true, version: VERSION, time: Date.now() };
-      case 'list': return { ok: true, time: Date.now(), docs: list(checkName(name), Number(q.since) || 0, q.match || null) };
+      // none: no such tab (deleted or renamed by hand), so the apps keep what they have rather than clear it
+      case 'list': return tab(checkName(name), false) ? { ok: true, time: Date.now(), docs: list(name, Number(q.since) || 0, q.match || null) } : { ok: true, time: Date.now(), docs: [], none: true };
       case 'get': { const d = getDoc(checkName(name), String(q.id)); return { ok: true, doc: d }; }
       case 'put': return locked(function () { return write({ op: 'put', app: q.app, coll: q.coll, id: q.id, doc: q.doc, ifUpdated: q.ifUpdated }); });
       case 'del': return locked(function () { return write({ op: 'del', app: q.app, coll: q.coll, id: q.id }); });
