@@ -392,8 +392,12 @@ const STAND_INS = {
   frostbite: "export const COLLS = ['items', 'zones']; export function look(read) { const n = read('items').length; return n ? [{ text: 'Freezer: ' + n + ' past best', href: './' }] : []; }",
   packrat: "export const COLLS = ['packs', 'reads', 'loans']; export function look(read) { return read('packs').filter(p => p.weak).map(p => ({ text: 'Packs: ' + p.id + ' weak', href: '#' + p.id })); }",
   placard: "export const COLLS = ['site', 'reports']; export function look(read) { const n = read('reports').length; return n ? [{ text: 'Rental: ' + n + ' new report', href: '#/reports' }] : []; }",
-  larder: "export const COLLS = ['items', 'queue']; export function look(read) { const n = read('items').length; return n ? [{ text: 'Larder: ' + n + ' on the list', href: './' }] : []; }",
-  mothball: "export const COLLS = ['totes', 'builds']; export function look(read) { return []; }",
+  larder: "export const COLLS = ['items', 'queue']; export function look(read) { const n = read('items').length; return n ? [{ text: 'Larder: ' + n + ' on the list', href: './' }] : []; }"
+    + " export function things(read) { return read('items').map(i => ({ name: i.name, where: i.place, href: '#' + i.id, texts: [i.name, i.place] })); }"
+    + " export function tags(read) { return Object.fromEntries(read('items').map(i => [i.id, { name: i.name, where: i.place }])); }",
+  mothball: "export const COLLS = ['totes', 'builds']; export function look(read) { return []; }"
+    + " export function things(read) { return read('totes').flatMap(t => t.items.map(line => ({ name: line, where: 'Tote ' + t.id + ' \u00b7 ' + t.name, href: '#' + t.id, texts: [line] }))); }"
+    + " export function tags(read) { return Object.fromEntries(read('totes').map(t => [t.id, { name: t.name, where: 'Tote ' + t.id }])); }",
 };
 async function serveStandIns(target, blocked = new Set()) {
   await target.route(/^https:\/\/(placard|mothball|larder|frostbite|packrat)\.junkdrawer\.works\/js\/attention\.js/, route => {
@@ -413,7 +417,9 @@ async function lookChecks({ browser, base, assert }) {
   const ops = [], errors = [], blocked = new Set();
   let google = 'up', key = K, records = {
     'frostbite.items': [{ id: 'a', name: 'Chili' }, { id: 'b', name: 'Peas', _deleted: true, _updated: 2 }],
-    'packrat.packs': [{ id: '03', weak: true }, { id: '04' }], 'placard.reports': [{ id: 'r1', text: 'Drip' }], 'larder.items': [{ id: 'rice' }, { id: 'oats' }] };
+    'packrat.packs': [{ id: '03', weak: true }, { id: '04' }], 'placard.reports': [{ id: 'r1', text: 'Drip' }],
+    'larder.items': [{ id: 'rice', name: 'Rice', place: 'Pantry' }, { id: 'oats', name: 'Oats', place: 'Pantry' }],
+    'mothball.totes': [{ id: '03', name: 'Christmas lights', items: ['Spare fuses', 'Extension cord'] }] };
   await ctx.route('https://script.google.com/**', async route => {
     if (google === 'down') return route.abort('internetdisconnected');
     const b = JSON.parse(route.request().postData() || '{}');
@@ -423,6 +429,7 @@ async function lookChecks({ browser, base, assert }) {
   });
   await serveStandIns(ctx, blocked);
   await ctx.addInitScript(([u, k]) => { try { if (!sessionStorage.getItem('set')) { localStorage.setItem('switchboard.ledger', JSON.stringify({ url: u, key: k })); sessionStorage.setItem('set', '1'); } } catch {} }, [U, K]);
+  await ctx.addInitScript(fakeNfc);
   const p = await ctx.newPage();
   p.on('pageerror', e => errors.push(e.message));
   const state = () => p.locator('#look-state').evaluate(el => [el.className, el.textContent]);
@@ -437,12 +444,33 @@ async function lookChecks({ browser, base, assert }) {
     'the card\'s lines, in order, each a link into its app (a deleted record reached its app\'s file)');
     assert.equal(await p.locator('#look-list b').first().textContent(), 'Freezer:');
     // the card first; the setup cards folded, the key off the screen, the ledger's state on the fold
-    assert.deepEqual(await p.evaluate(() => [...document.querySelectorAll('main > section:not([hidden]), main > details')].map(e => e.id)), ['look', 'check', 'setup']);
+    assert.deepEqual(await p.evaluate(() => [...document.querySelectorAll('main > section:not([hidden]), main > details')].map(e => e.id)), ['look', 'find', 'check', 'setup']);
     assert.equal(await p.locator('#setup').evaluate(d => d.open), false, 'Setup open once connected');
     assert.equal(await p.locator('#lkey').isVisible(), false, 'the key is on the first screen');
     assert.equal(await p.locator('#setup-state').textContent(), 'Connected to ledger v1.1');
     assert.deepEqual([...new Set(ops)].sort(), ['list', 'ping'], 'Needs a look asked the ledger for something other than lists');
     assert.equal(await p.evaluate(() => document.documentElement.scrollWidth), 390);
+    // Find anything: what every word typed is found in, each result naming its app and place, opening it there
+    const found = async q => { await p.fill('#find-q', q); return p.locator('#find-list li').evaluateAll(lis => lis.map(li => [li.innerText.replace(/\n/g, ' | '), li.querySelector('a')?.href || null])); };
+    assert.deepEqual(await found('fuses'), [['Spare fuses | Mothball \u00b7 Tote 03 \u00b7 Christmas lights', 'https://mothball.junkdrawer.works/#03']]);
+    assert.deepEqual(await found('pantry'), [['Rice | Larder \u00b7 Pantry', 'https://larder.junkdrawer.works/#rice'], ['Oats | Larder \u00b7 Pantry', 'https://larder.junkdrawer.works/#oats']]);
+    assert.deepEqual(await found('saffron'), [['No "saffron" in any app.', null]]);
+    assert.equal(await p.locator('#find-list').isVisible(), true);
+    await p.fill('#find-q', '');
+    assert.equal(await p.locator('#find-list').isHidden(), true, 'results left after the box was emptied');
+    // Check a tag names what a sticker is for, or says it isn't set up yet; Switchboard's own test sticker, neither
+    const tagged = async url => {
+      await p.click('#check-btn');
+      await p.waitForFunction(() => /^Listening/.test(document.querySelector('#check-msg').textContent));
+      await p.evaluate(u => window.__nfc.tap(u), url);
+      await p.waitForSelector('#check-out:not([hidden])');
+      return p.locator('#check-out .named').allTextContents();
+    };
+    assert.deepEqual(await tagged('https://tag.junkdrawer.works/p/rice'), ['Rice \u00b7 Pantry']);
+    assert.deepEqual(await tagged('https://tag.junkdrawer.works/t/03'), ['Christmas lights \u00b7 Tote 03']);
+    assert.deepEqual(await tagged('https://tag.junkdrawer.works/p/saffron'), ['Not set up in Larder yet.']);
+    assert.deepEqual(await tagged('https://tag.junkdrawer.works/f/top'), [], 'an app whose file doesn\'t name its stickers');
+    assert.deepEqual(await tagged('https://tag.junkdrawer.works/s/test'), []);
     // the summary opens and closes it, as any fold
     await p.click('#setup > summary');
     assert.equal(await p.locator('#lkey').isVisible(), true);
@@ -465,6 +493,8 @@ async function lookChecks({ browser, base, assert }) {
     await p.waitForFunction(() => document.querySelector('#look-state').classList.contains('offline'));
     assert.match((await state())[1], /^Offline — as of [A-Z][a-z]{2} \d+, \d+:\d\d [ap]m$/);
     assert.equal((await lines()).length, 4, 'the last word went with the signal');
+    assert.deepEqual((await found('fuses')).map(x => x[0]), ['Spare fuses | Mothball \u00b7 Tote 03 \u00b7 Christmas lights'], 'Find anything found nothing with no signal');
+    await p.fill('#find-q', '');
     google = 'up';
     // Packrat's site down: its last word stays, the others are new
     blocked.add('packrat');
@@ -484,6 +514,7 @@ async function lookChecks({ browser, base, assert }) {
     await p.click('#ledger-forget');
     await p.click('dialog[open] button[type=submit]');
     await p.waitForFunction(() => document.querySelector('#look').hidden);
+    assert.equal(await p.locator('#find').isHidden(), true, 'Find anything left after Forget');
     assert.deepEqual(await p.evaluate(() => Object.keys(localStorage).filter(k => k.startsWith('switchboard.m.'))), [], 'Forget kept the apps\' records');
     await p.reload();
     assert.deepEqual([await p.locator('#look').isHidden(), await p.locator('#setup').evaluate(d => d.open)], [true, true]);

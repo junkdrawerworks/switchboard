@@ -83,6 +83,7 @@ checkBtn.addEventListener('click', async () => {
       const to = ok ? resolve(t.letter, t.id, sent) : null;
       mount(out,
         h('div', { class: 'tape-wrap' }, h('span', { class: 'tape-cap' }, `${t.letter} / ${APPS[t.letter]?.name || 'no app'}`), h('div', { class: 'tape' }, t.id)),
+        to ? named(to) : null,
         !ok ? h('p', { class: 'msg bad' }, BROKEN) : to ? h('p', {}, 'Goes to ', h('code', {}, to)) : h('p', {}, 'No app owns this letter.'),
         ok && !overridesOk ? h('p', { class: 'msg bad' }, NOT_SENT) : null,
         ok && sent[`${t.letter}/${t.id}`] ? h('p', { class: 'muted' }, 'Sent here by OVERRIDES in 404.html.') : null,
@@ -181,6 +182,7 @@ function checkApps() {
 }
 function renderLook() {
   $('#look').hidden = !ledger.connected;
+  renderFind();
   if (!ledger.connected) return;
   const st = $('#look-state'), down = look.down, lines = look.lines();
   // what went wrong, short, and how old the last word shown is: 'Offline — as of Nov 27, 9:14 am', 'Packrat didn't answer'
@@ -199,6 +201,35 @@ function renderLook() {
 const again = () => { if (ledger.connected && !look.running && Date.now() - look.checkedAt > 60000) checkLedger(); };
 document.addEventListener('visibilitychange', () => { if (!document.hidden) again(); });
 addEventListener('online', again);
+
+// ---- find anything
+// One box over every app: what each app's own search looks through (its attention file's things), matched the kit's
+// way (find.js, as Larder's, Frostbite's and Mothball's boxes), each result naming its app and place and opening it
+// there. It searches what each app said last, so it works with no signal too.
+let query = '';
+const SHOW = 40;
+function renderFind() {
+  $('#find').hidden = !ledger.connected;
+  const list = $('#find-list'), q = query.trim();
+  list.hidden = !q || !ledger.connected;
+  if (list.hidden) { list.replaceChildren(); return; }
+  const hits = look.find(q), missing = look.missing;
+  const not = missing.length ? ` ${names(missing)} ${missing.length > 1 ? 'haven\'t' : 'hasn\'t'} answered yet.` : '';
+  mount(list, hits.length ? hits.slice(0, SHOW).map(x => h('li', {}, h('a', { class: 'row', href: x.href },
+    h('span', { class: 'main' }, h('span', { class: 't' }, x.name), h('span', { class: 's' }, [APPS[x.l].name, x.where].filter(Boolean).join(' \u00b7 ')))))) : h('li', { class: 'empty' }, `No "${q}" in any app.${not}`),
+    hits.length > SHOW ? h('li', { class: 'empty' }, `and ${hits.length - SHOW} more: add a word to narrow it`) : null);
+}
+$('#find-q').addEventListener('input', e => { query = e.target.value; renderFind(); });
+// Check a tag, once connected: what the sticker is for, as the app it opens has it ('Cumin, ground · Spice drawer'), or
+// that the app has no record for it yet. Where it goes decides (OVERRIDES included); not an app's page, or an app that
+// hasn't answered here: nothing.
+function named(to) {
+  if (!ledger.connected) return null;
+  const l = Object.keys(APPS).find(k => k !== 's' && to.startsWith(APPS[k].base + '#')), id = l ? to.slice(APPS[l].base.length + 1) : '';
+  const it = l && /^[a-z0-9][a-z0-9-]{0,39}$/.test(id) ? look.named(l, id) : undefined;
+  if (it === undefined) return null;
+  return it ? h('p', { class: 'named' }, h('b', {}, it.name), it.where ? ` \u00b7 ${it.where}` : '') : h('p', { class: 'muted named' }, `Not set up in ${APPS[l].name} yet.`);
+}
 
 // ---- another device
 // Switchboard's own connect link as a QR code: the other phone or tablet's camera opens it, its Switchboard is set up

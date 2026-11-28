@@ -1843,3 +1843,34 @@ test('Forget, or another ledger, drops what Switchboard read and what the apps s
   sw.forget();
   assert.deepEqual(kept(), [], 'Forget kept the apps\' records on this device');
 });
+
+test('Find anything searches what each app says it holds, the kit\'s way, and Check a tag knows what each sticker is for', async () => {
+  const mods = standIns();
+  mods.p = { ...mods.p, things: read => read('items').map(i => ({ name: i.name, where: i.place, href: '#' + i.id, texts: [i.name, i.place] })),
+    tags: read => Object.fromEntries(read('items').map(i => [i.id, { name: i.name, where: i.place }])) };
+  mods.t = { ...mods.t, COLLS: ['totes'], things: read => read('totes').flatMap(t => (t.items || []).map(line => ({ name: line, where: `Tote ${t.id}`, href: '#' + t.id, texts: [line] }))),
+    tags: read => Object.fromEntries(read('totes').map(t => [t.id, { name: t.name, where: `Tote ${t.id}` }])) };
+  const { open, look, net } = await lookWorld({ mods });
+  const l = open('larder'), m = open('mothball');
+  l.put('items', { id: 'cumin', name: 'Cumin, ground', place: 'Spice drawer' }); l.put('items', { id: 'chiles', name: 'Jalapeño flakes', place: 'Spice drawer' });
+  l.put('items', { id: 'gone', name: 'Spare fuses', place: 'Hall' }); l.del('items', 'gone');
+  m.put('totes', { id: '03', name: 'Christmas lights', items: ['Spare fuses', 'Extension cord'] });
+  await Promise.all([l.flush(), m.flush()]);
+  await look.checkAll();
+  const find = q => look.find(q).map(x => [x.l, x.name, x.where, x.href]);
+  assert.deepEqual(find('fuses'), [['t', 'Spare fuses', 'Tote 03', 'https://mothball.junkdrawer.works/#03']], 'a deleted record was found');
+  assert.deepEqual(find('jalapeno'), [['p', 'Jalapeño flakes', 'Spice drawer', 'https://larder.junkdrawer.works/#chiles']], 'accents');
+  assert.deepEqual(find('drawer ground').map(x => x[1]), ['Cumin, ground'], 'words in any order, across a thing\'s texts');
+  assert.deepEqual(find('zzz'), []);
+  // Check a tag: a record's sticker, one with no record (not set up yet), and an app whose file doesn't say
+  assert.deepEqual(look.named('p', 'cumin'), { name: 'Cumin, ground', where: 'Spice drawer' });
+  assert.equal(look.named('p', 'saffron'), null);
+  assert.equal(look.named('p', 'constructor'), null, 'an id that is a name every object has');
+  assert.equal(look.named('f', 'top'), undefined, 'an app that doesn\'t name its stickers');
+  // with no signal it searches what each app said last
+  net.up = false;
+  await look.checkAll();
+  assert.deepEqual(look.down.length, 5);
+  assert.deepEqual(find('fuses').map(x => x[1]), ['Spare fuses']);
+  assert.deepEqual(look.named('t', '03'), { name: 'Christmas lights', where: 'Tote 03' });
+});

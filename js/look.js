@@ -1,6 +1,7 @@
-// Needs a look: what each app says is due, from the app's own rules. Each app publishes js/attention.js (its COLLS, and
-// look(read, now) for its lines); Switchboard imports it from the app's address and hands it the app's records, read
-// from the ledger with the key Switchboard already holds. Read only: the only requests here are lists, and nothing is
+// Needs a look and Find anything: what each app says is due, and what it holds, from the app's own rules. Each app
+// publishes js/attention.js (its COLLS; look(read, now) for its lines; things(read, now) for what its own search looks
+// through; tags(read) for what each of its stickers is for); Switchboard imports it from the app's address and hands it
+// the app's records, read from the ledger with the key Switchboard already holds. Read only: the only requests here are lists, and nothing is
 // written to any app's records. No DOM here: unit-tested in test/look.test.mjs.
 //
 // Each app's records are kept here the way the apps keep theirs (switchboard.m.<app>.<coll>: listed whole once a day,
@@ -8,6 +9,7 @@
 // when Switchboard opens, and with no signal shows the last word with its time. Forget, or another ledger's address,
 // clears both: the kit's ledger.js drops every switchboard.m.* key then.
 import { APPS } from './kit/tags.js';
+import { found } from './kit/find.js';
 
 // The card's order: food going past its best first, then packs, the rental, the shopping list and the totes.
 export const ORDER = ['f', 'm', 'h', 'p', 't'];
@@ -19,6 +21,9 @@ const failed = (message, kind) => Object.assign(new Error(message), { kind });
 const text = v => (v == null ? '' : String(v));
 // What an app's file gives, kept to the shapes the page draws (a file from a newer or older release can't break it).
 const linesOf = v => (Array.isArray(v) ? v : []).filter(x => x && text(x.text)).map(x => ({ text: text(x.text), href: text(x.href) || './' }));
+const thingsOf = v => (Array.isArray(v) ? v : []).filter(x => x && text(x.name)).map(x => ({ name: text(x.name), where: text(x.where), href: text(x.href) || './',
+  texts: (Array.isArray(x.texts) ? x.texts : [x.name]).map(text) }));
+const tagsOf = v => Object.fromEntries(Object.entries(v && typeof v === 'object' ? v : {}).filter(([, t]) => t && text(t.name)).map(([id, t]) => [id, { name: text(t.name), where: text(t.where) }]));
 
 export class Look {
   // call(body): the ledger's answer to one request (Switchboard's Ledger.call, with its key and its errors' kinds).
@@ -84,7 +89,11 @@ export class Look {
     }
     return this.results[l];
   }
-  answer(m, read, now) { return { lines: linesOf(m.look(read, now)) }; }
+  // An app's file from before Find anything gives no things (it isn't searched) and no tags (Check a tag says nothing).
+  answer(m, read, now) {
+    return { lines: linesOf(m.look(read, now)), things: typeof m.things === 'function' ? thingsOf(m.things(read, now)) : [],
+      tags: typeof m.tags === 'function' ? tagsOf(m.tags(read)) : null };
+  }
 
   // Every app at once; then(letter) after each answers, so the card fills in as they come. One run at a time.
   checkAll(then = () => {}) {
@@ -101,6 +110,14 @@ export class Look {
   lines() { return ORDER.flatMap(l => (this.results[l]?.lines || []).map(x => ({ ...x, l, href: new URL(x.href, APPS[l].base).href }))); }
   get down() { return ORDER.filter(l => this.results[l]?.error); }
   get missing() { return ORDER.filter(l => !this.results[l]?.at); }
+  // Find anything: what every word typed is found in, the kit's way (as each app's own search), each app's in its own
+  // order, the apps in ORDER: [{ name, where, href, l }].
+  find(q) {
+    return ORDER.flatMap(l => (this.results[l]?.things || []).filter(t => found(q, ...t.texts)).map(t => ({ name: t.name, where: t.where, l, href: new URL(t.href, APPS[l].base).href })));
+  }
+  // Check a tag: what the sticker opening that app at #id is for ({ name, where }), null when the app has no record for it
+  // (not set up yet), undefined when it isn't known here (the app hasn't answered, or its file doesn't say).
+  named(l, id) { const t = this.results[l]?.tags; return t ? (Object.hasOwn(t, id) ? t[id] : null) : undefined; }
   // When the oldest of the last words shown was said (for 'as of'), or 0.
   oldest(ls = ORDER) { const at = ls.map(l => this.results[l]?.at).filter(Boolean); return at.length ? Math.min(...at) : 0; }
 }

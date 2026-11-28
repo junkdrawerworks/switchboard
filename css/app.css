@@ -21,3 +21,9 @@
 #look-list .t { font-weight: 400; }
 #look-list .t b { font-weight: 600; }
 #look-list .empty { padding: 4px 0; text-align: left; }
+/* Find anything: the box, and what it finds under it while something is typed */
+#find .search { margin-bottom: 0; }
+#find-list { margin: 12px 0 0; }
+#find-list .empty { padding: 4px 0; text-align: left; }
+/* Check a tag, connected: what the sticker is for, under its tape */
+#check-out .named { margin: 10px 0 6px; overflow-wrap: anywhere; }
