@@ -22,8 +22,10 @@ const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/cs
 // release (see the end); with `release` 'files', a next release that changes the css and js but not index.html.
 let net = 'up', release = false;
 const held = [];
+let lastAsked = 0;
 const server = createServer((req, res) => {
   const path = new URL(req.url, 'http://x').pathname;
+  lastAsked = Date.now();
   if (net === 'down') { req.socket.destroy(); return; }
   if (net === 'stalled' || (net === 'files stalled' && !/(\/|\.html)$/.test(path)) || (net === 'scripts stalled' && path.endsWith('.js'))) {
     held.push([req, res]);
@@ -46,8 +48,16 @@ async function serve(req, res) {
   res.end(body);
 }
 const base = `http://localhost:${server.address().port}/`;
-// The connection comes back: the held requests are answered (as things are now, before `release` next changes).
-const unstall = () => { net = 'up'; return Promise.all(held.splice(0).map(([req, res]) => serve(req, res))); };
+// The connection comes back: the held requests are answered (as things are now, before `release` next changes), and
+// so are the ones the browser had queued behind them, before the next check starts. (The browser opens at most six
+// connections to a server like this one: a page that asks for more files than that at once, and is held, leaves the
+// rest waiting for a connection, and they'd reach the server during the next check, which would hold them and take the
+// connections that check's page needs.)
+const unstall = async () => {
+  net = 'up';
+  await Promise.all(held.splice(0).map(([req, res]) => serve(req, res)));
+  while (Date.now() - lastAsked < 500) await new Promise(r => setTimeout(r, 100));
+};
 // Waits for ok() to come true, for up to ms, or fails saying what didn't happen.
 const until = async (ok, ms, what) => {
   for (const end = Date.now() + ms; !(await ok());) { assert.ok(Date.now() < end, what); await new Promise(r => setTimeout(r, 100)); }
