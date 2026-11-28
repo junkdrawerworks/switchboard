@@ -99,6 +99,18 @@ export async function resolverChecks({ browser, assert }) {
     assert.deepEqual(await sb.evaluate(() => { const card = document.querySelector('#check'), code = card.querySelector('#check-out code');
       return { page: document.documentElement.scrollWidth, code: Math.ceil(code.getBoundingClientRect().right) <= card.getBoundingClientRect().right - parseFloat(getComputedStyle(card).paddingRight) }; }),
     { page: 390, code: true }, 'a long address in Check a tag runs off its card');
+    // a mistake typed into 404.html (a comma left out between two lines) stops every tap there: Check a tag says so,
+    // and offers no Open
+    srv.patch = b => b.replace('var OVERRIDES = {\n};', "var OVERRIDES = {\n  'h/water-heater': 'https://example.com/manual'\n  'h/smoke-co': 'https://example.com/alarm'\n};");
+    await sb.reload();
+    await sb.click('#check-btn');
+    await sb.waitForFunction(() => /^Listening/.test(document.querySelector('#check-msg').textContent));
+    await sb.evaluate(u => window.__nfc.tap(u), 'https://tag.junkdrawer.works/h/water-heater');
+    await sb.waitForSelector('#check-out:not([hidden])');
+    assert.deepEqual(await sb.locator('#check-out').evaluate(o => ({ cap: o.querySelector('.tape-cap').textContent,
+      said: [...o.querySelectorAll('p')].map(p => [p.className, p.textContent]), links: o.querySelectorAll('a').length })),
+    { cap: 'h / Placard', said: [['msg bad', '404.html has a mistake in it, so no sticker opens anything: every tap stops on "This tag isn\'t set up". Undo the last change to 404.html on GitHub.']], links: 0 },
+    'Check a tag offers where a sticker goes while 404.html stops every tap');
     await sb.close();
     srv.patch = null;
     assert.deepEqual(errors, [], 'errors on the resolver page');

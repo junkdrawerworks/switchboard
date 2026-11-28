@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import { APPS, parseTag, resolve, tagUrl, slug, newId, uniqueSlug } from '../js/kit/tags.js';
-import { readOverrides } from '../js/overrides.js';
+import { readOverrides, resolverWorks } from '../js/overrides.js';
 
 test('tag links round-trip', () => {
   assert.equal(tagUrl('h', 'water-heater'), 'https://tag.junkdrawer.works/h/water-heater');
@@ -37,7 +37,8 @@ test('a made-up id is never one a sheet would read as a number (all digits, or d
 });
 
 // 404.html's scripts (the one in its head, then the one at the end of its body) with a pretend page. overrides: lines
-// put into OVERRIDES, as the owner would.
+// put into OVERRIDES, as the owner would. A script that throws stops there and the next one still runs, as in a browser
+// (errors: what each said).
 function runResolver(pathname, overrides = '') {
   let html = readFileSync(new URL('../404.html', import.meta.url), 'utf8');
   if (overrides) html = html.replace('var OVERRIDES = {\n};', `var OVERRIDES = {\n${overrides}\n};`);
@@ -47,8 +48,9 @@ function runResolver(pathname, overrides = '') {
     navigator: { serviceWorker: { register(u) { ctx.registered = u; return Promise.resolve(); } } }, document: { getElementById: el } };
   vm.createContext(ctx);
   ctx.window = ctx; // the page's globals are window's, as in a browser
-  for (const [, script] of html.matchAll(/<script>([\s\S]*?)<\/script>/g)) vm.runInContext(script, ctx);
-  return { html, went: ctx.went, routes: ctx.ROUTES, names: ctx.NAMES, overrides: { ...ctx.OVERRIDES }, registered: ctx.registered, here: el('here').textContent, points: !el('points').hidden,
+  const errors = [];
+  for (const [, script] of html.matchAll(/<script>([\s\S]*?)<\/script>/g)) try { vm.runInContext(script, ctx); } catch (e) { errors.push(e.message); }
+  return { html, errors, went: ctx.went, routes: ctx.ROUTES, names: ctx.NAMES, overrides: { ...ctx.OVERRIDES }, registered: ctx.registered, here: el('here').textContent, points: !el('points').hidden,
     title: els.title.textContent, shown: !els.app.hidden ? `${el('why').textContent} ${el('name').textContent} ${el('open').href}` : '' };
 }
 
@@ -112,6 +114,8 @@ test('Check a tag reads OVERRIDES as the resolver does, so it shows where a tap 
     "  'H/Boiler': 'https://example.com/boiler',\n  \"h/well-tank\": \"https://example.com/tank?a=1&b=2\",\n  // 'h/old': 'https://example.com/old',\n  'm/03':'https://example.com/pack'",
     "  /* moved in March */ 'h/range': 'https://example.com/range', // the new one\n"]) {
     const r = runResolver('/nothing', lines);
+    assert.deepEqual(r.errors, [], lines);
+    assert.equal(resolverWorks(r.html), true, lines);
     assert.deepEqual(readOverrides(r.html), r.overrides, `Check a tag and the resolver read OVERRIDES differently: ${lines}`);
     assert.ok(Object.keys(r.overrides).length, 'the resolver took none of them: ' + lines);
   }
@@ -122,4 +126,27 @@ test('Check a tag reads OVERRIDES as the resolver does, so it shows where a tap 
   assert.equal(resolve('h', 'well-tank', readOverrides(r.html)), 'https://placard.junkdrawer.works/#well-tank');
   // the block the reader looks for is in 404.html, in its shape
   assert.match(readFileSync(new URL('../404.html', import.meta.url), 'utf8'), /\nvar OVERRIDES = \{\n\};\n/, '404.html\'s OVERRIDES block changed shape: change js/overrides.js with it');
+});
+
+test('a mistake typed into OVERRIDES stops every tap, and Check a tag knows it; a pair kept in a comment reads as the tap goes', () => {
+  assert.equal(resolverWorks(runResolver('/nothing').html), true, 'as shipped');
+  for (const [what, lines] of [
+    ['a comma left out between two lines', "  'h/water-heater': 'https://example.com/manual'\n  'h/smoke-co': 'https://example.com/alarm'"],
+    ['curly quotes from a phone keyboard', "  \u2018h/water-heater\u2019: \u2018https://example.com/manual\u2019,"],
+    ['= for :', "  'h/water-heater' = 'https://example.com/manual',"]]) {
+    for (const path of ['/h/water-heater', '/h/smoke-co', '/t/01']) {
+      const r = runResolver(path, lines);
+      assert.deepEqual([r.went, r.title, r.shown], [undefined, 'This tag isn\'t set up', ''], `${what}: a tap on ${path}`);
+      assert.equal(r.errors.length, 2, `${what}: the page's two scripts didn't both stop: ${r.errors}`);
+    }
+    const { html } = runResolver('/nothing', lines);
+    assert.equal(resolverWorks(html), false, `${what}: Check a tag takes 404.html for working`);
+    assert.deepEqual(readOverrides(html), {}, `${what}: Check a tag reads an override no tap gets`);
+  }
+  // an old pair kept in a comment after the new one: the tap goes to the new one, and Check a tag says so
+  const kept = "  'h/water-heater': 'https://example.com/new', // was 'h/water-heater': 'https://example.com/old'";
+  const r = runResolver('/h/water-heater', kept);
+  assert.equal(r.went, 'https://example.com/new');
+  assert.equal(resolverWorks(r.html), true);
+  assert.equal(resolve('h', 'water-heater', readOverrides(r.html)), r.went, 'Check a tag reads the commented-out pair');
 });
