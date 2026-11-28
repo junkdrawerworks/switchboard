@@ -89,6 +89,40 @@ export async function targetsAudit({ browser, base, assert, hashes, skip = '' })
   } finally { await ctx.close(); }
 }
 
+// A long edit sheet keeps what was typed through a reload of the tab (Android reloads a tab left in the background for
+// a call or another app): opened again, it's back with "Restored what you were typing." and Discard, which puts back
+// what the record holds; after Cancel or Save a reload brings nothing back. On the sample: path is the page, open the
+// clicks that open the sheet, field the id of one of its fields.
+export async function draftChecks({ browser, base, assert, path, open, field, typed = 'Half a sentence, typed before a call' }) {
+  const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true, serviceWorkers: 'block' });
+  try {
+    const page = await ctx.newPage(), input = `dialog[open] #${field}`, note = () => page.locator('dialog[open] .draft-note');
+    const sheet = async () => { for (const s of open) await page.click(s); await page.waitForSelector(input); };
+    await page.goto(base + '?demo' + path);
+    await sheet();
+    const was = await page.inputValue(input);
+    assert.equal(await note().count(), 0, `${path}: "restored" with nothing typed before`);
+    await page.fill(input, typed);
+    await page.reload();
+    await sheet();
+    assert.equal(await page.inputValue(input), typed, `${path}: what was typed in #${field} went with the reload`);
+    assert.equal(await note().locator('p').textContent(), 'Restored what you were typing.');
+    await note().locator('button', { hasText: 'Discard' }).click();
+    assert.deepEqual([await page.inputValue(input), await note().count()], [was, 0], `${path}: Discard didn't put back what the record holds`);
+    await page.fill(input, typed);
+    await page.click('dialog[open] >> text=Cancel');
+    await page.reload();
+    await sheet();
+    assert.deepEqual([await page.inputValue(input), await note().count()], [was, 0], `${path}: Cancel left what was typed to come back`);
+    await page.fill(input, typed);
+    await page.click('dialog[open] button[type=submit]');
+    await page.waitForFunction(() => !document.querySelector('dialog[open]'));
+    await page.reload();
+    await sheet();
+    assert.equal(await note().count(), 0, `${path}: Save left what was typed to come back`);
+  } finally { await ctx.close(); }
+}
+
 // A sheet's buttons on a 320 px phone wrap (Larder's "Ounces or grams?": Keep 88 oz, Cancel, Use 88 g): 8 px between
 // rows as between buttons, so the main one isn't flush under the one above it; an empty line above them takes no room,
 // and a refused Save's line sits 8 px above them. At 390 px the same three fit on one row.
