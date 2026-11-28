@@ -371,6 +371,7 @@ export async function appChecks({ page, ctx, base, assert, problems }) {
   });
   const state = () => page.locator('#ledger-state').evaluate(el => [el.className, el.textContent]);
   assert.deepEqual(await state(), ['sync unset', 'Not connected to the ledger']);
+  assert.equal(await page.locator('#way-back').isHidden(), true, 'the way back after a mistake shown before a ledger is set up');
   await page.fill('#lurl', 'https://script.google.com/macros/s/AKfyTEST/exec');
   await page.fill('#lkey', 'k'.repeat(40));
   google = 'down';
@@ -386,6 +387,10 @@ export async function appChecks({ page, ctx, base, assert, problems }) {
   await page.waitForFunction(() => /Connected to ledger v1.1/.test(document.querySelector('#ledger-msg').textContent));
   assert.deepEqual(await state(), ['sync synced', 'Connected to ledger v1.1']);
   assert.equal(await page.locator('#ledger-msg').getAttribute('class'), 'msg ok');
+  // once connected, the card says where to look after a mistake: the deleted cell, and Version history then the Ledger menu
+  assert.equal(await page.locator('#way-back').isVisible(), true, 'no way back after a mistake on the Ledger card');
+  assert.equal(await page.locator('#way-back').textContent(), 'Undo a mistake: something deleted in an app comes back with FALSE in its row\'s deleted cell (column C, in that app\'s tab of the sheet). '
+    + 'For a change, restore the version from before (File, Version history), then use the sheet\'s Ledger menu, Send everything to the phones again. The steps are in the build guide\'s Reference.');
   await anotherDevice({ page, base, assert });
   // the first zip's script (1.0) answers too, but turns tote 01 into 1: amber, and how to paste the new one
   version = '1.0';
@@ -448,6 +453,7 @@ export async function appChecks({ page, ctx, base, assert, problems }) {
   assert.deepEqual(await state(), ['sync unset', 'Not connected to the ledger']);
   assert.equal(await page.inputValue('#lurl'), '');
   assert.equal(await page.locator('#another').isHidden(), true, 'Another device offered after Forget');
+  assert.equal(await page.locator('#way-back').isHidden(), true, 'the way back after a mistake left after Forget');
   await page.unroute('https://script.google.com/**');
   for (let i = problems.length - 1; i >= from; i--) if (/script\.google\.com|Failed to load resource: net::ERR_INTERNET_DISCONNECTED/.test(problems[i])) problems.splice(i, 1);
 }

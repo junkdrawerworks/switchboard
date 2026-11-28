@@ -87,6 +87,7 @@ function renderLedger() {
     : answer.version ? ['synced', `Connected to ledger v${answer.version}`] : [answer.error.kind || 'offline', stateLine(answer.error)];
   st.className = 'sync ' + k; st.textContent = text;
   $('#ledger-forget').hidden = !ledger.connected;
+  $('#way-back').hidden = !ledger.connected;   // where to look in the sheet after a mistake (the guide's Reference has the steps)
   renderApps();
   renderAnother();
 }
