@@ -36,7 +36,7 @@ a { color: inherit; }
 h1, h2, h3 { font-family: var(--display); font-weight: 700; line-height: 1.05; letter-spacing: .01em; }
 h2 { font-size: 26px; margin: 26px 0 10px; text-transform: uppercase; }
 h3 { font-size: 20px; margin: 20px 0 8px; text-transform: uppercase; }
-code, .mono { font-family: var(--mono); font-size: .86em; }
+code, .mono { font-family: var(--mono); font-size: .86em; overflow-wrap: anywhere; } /* a long address breaks inside its card */
 small, .muted { color: var(--ink2); }
 
 /* top bar */

@@ -91,6 +91,14 @@ export async function resolverChecks({ browser, assert }) {
     assert.deepEqual(await checked('https://tag.junkdrawer.works/h/water-heater'), { to: 'https://example.com/manual', open: 'https://example.com/manual',
       why: ['Sent here by OVERRIDES in 404.html.'] }, 'Check a tag shows the old page for a sticker OVERRIDES sends elsewhere');
     assert.deepEqual(await checked('https://tag.junkdrawer.works/h/smoke-co'), { to: 'https://placard.junkdrawer.works/#smoke-co', open: 'https://placard.junkdrawer.works/#smoke-co', why: [] });
+    // a long address (a maker's manual) wraps inside the card, so nothing scrolls sideways
+    const manual = 'https://www.example-heaters.com/support/manuals/ProLineXE50GallonGasWaterHeaterInstallationAndUseGuide.pdf';
+    srv.patch = b => b.replace('var OVERRIDES = {\n};', `var OVERRIDES = {\n  'h/water-heater': '${manual}'\n};`);
+    await sb.reload();
+    assert.equal((await checked('https://tag.junkdrawer.works/h/water-heater')).to, manual);
+    assert.deepEqual(await sb.evaluate(() => { const card = document.querySelector('#check'), code = card.querySelector('#check-out code');
+      return { page: document.documentElement.scrollWidth, code: Math.ceil(code.getBoundingClientRect().right) <= card.getBoundingClientRect().right - parseFloat(getComputedStyle(card).paddingRight) }; }),
+    { page: 390, code: true }, 'a long address in Check a tag runs off its card');
     await sb.close();
     srv.patch = null;
     assert.deepEqual(errors, [], 'errors on the resolver page');
