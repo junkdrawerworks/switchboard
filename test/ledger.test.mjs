@@ -1226,7 +1226,12 @@ test('a sync on its way in another tab when the phone moves to a different ledge
   await tick(); await tick();
   adopt('frostbite', REAL, real.props.KEY);                         // a connect link for the real ledger, taken in a (it reloads)
   b.reconfig();                                                     // b hears of it (the storage event)
-  release(); await onItsWay; await b.sync(['items']);
+  release();
+  assert.equal(await onItsWay, false, 'the old sheet\'s answer counted as a sync');
+  assert.equal(JSON.parse(localStorage.getItem('frostbite.m.items') || '{"docs":{}}').docs.test, undefined, 'the old sheet\'s record was kept for the new ledger');
+  for (let i = 0; i < 20 && !b._syncing; i++) await tick();   // the new ledger's sync starts by itself (reconfig)
+  await b._syncing;
+  assert.deepEqual(b.docs('items').map(d => d.name), ['Beef stew'], 'the tab did not sync the new ledger by itself');
   const a2 = new Ledger('frostbite', { fetchImpl }); opened.push(a2); await a2.sync(['items']);   // a after its reload
   assert.deepEqual(a2.docs('items').map(d => d.name), ['Beef stew'], 'what the phone shows for the real ledger');
   assert.deepEqual(b.docs('items').map(d => d.name), ['Beef stew']);
@@ -1273,6 +1278,7 @@ test('a row cleared or deleted by hand in the sheet leaves the phones too, by th
   const s = sheets['frostbite.items'], r = s.data.findIndex(x => x[0] === 'test') + 1;
   for (let c = 0; c < 4; c++) s.data[r - 1][c] = '';               // select the row, Delete: onEdit runs, the id is gone
   g.onEdit({ range: s.getRange(r, 1, 1, 4) });
+  t.mock.timers.tick(60e3);   // a minute on: no longer "changed here since the list was asked for"
   await a.sync(['items']);
   assert.deepEqual(a.docs('items').map(d => d.name).sort(), ['Beef stew', 'Test record'], 'the same day: a list of changes can\'t say it went');
   t.mock.timers.tick(25 * 3600e3);
@@ -1316,6 +1322,41 @@ test('the day\'s whole list keeps a record that is waiting to go, or changed her
   await a.flush(); await a.sync(['totes']);
   assert.deepEqual(a.docs('totes').map(d => d.id).sort(), ['01', '02', '03']);
   assert.equal(sheets['mothball.totes'].data.length - 1, 3);
+});
+
+test('the day\'s whole list: each of its three guards keeps a record on its own', async t => {
+  const { net, open, g } = await world();
+  t.mock.timers.enable({ apis: ['Date'], now: Date.now() });
+  const a = open('mothball');
+  a.put('totes', { id: '01', name: 'Lights' }); await a.flush(); await a.sync(['totes']);
+  const day = () => t.mock.timers.tick(25 * 3600e3), later = () => t.mock.timers.tick(1000);
+  // the list is read when it's asked for, and its answer held back until release()
+  let release = null;
+  const holdList = () => { net.hold = body => { if (body.op !== 'list') return null; const text = JSON.stringify(post(g, body)); return new Promise(r => { release = () => r(text); }); }; };
+  const asked = async () => { for (let i = 0; i < 50 && !release; i++) await tick(); assert.ok(release, 'the list was never asked for'); };
+  // 1. waiting when the answer comes: 02 made with no signal, its send still failing
+  day(); net.up = false; a.put('totes', { id: '02', name: 'Wreaths' }); await a.flush(); net.up = true; later();
+  net.fail = body => body.op === 'batch';
+  await a.sync(['totes']);
+  assert.ok(a.doc('totes', '02'), 'a record still waiting to go left the copy');
+  net.fail = null; await a.flush();
+  // 2. changed here after the list was asked for, and sent before its answer came: 03
+  day(); holdList(); release = null;
+  let syncing = a.sync(['totes']); await asked();
+  later(); a.put('totes', { id: '03', name: 'Garlands' }); await a.flush();
+  assert.equal(a.pending, 0);
+  release(); await syncing; net.hold = null;
+  assert.ok(a.doc('totes', '03'), 'a record changed here after the list was asked for left the copy');
+  // 3. waiting when the list was asked for, and sent before its answer came: 04
+  day(); net.up = false; a.put('totes', { id: '04', name: 'Inflatables' }); await a.flush(); net.up = true; later();
+  holdList(); release = null; net.fail = body => body.op === 'batch';
+  syncing = a.sync(['totes']); await asked();
+  net.fail = null; await a.flush();
+  assert.equal(a.pending, 0);
+  release(); await syncing; net.hold = null;
+  assert.ok(a.doc('totes', '04'), 'a record waiting when the list was asked for left the copy');
+  await a.sync(['totes']);
+  assert.deepEqual(a.docs('totes').map(d => d.id).sort(), ['01', '02', '03', '04']);
 });
 
 test('a sync asks for every collection at once: three lists Google holds 1 s each end in about 1 s', async () => {
