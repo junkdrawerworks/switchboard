@@ -52,11 +52,12 @@ const base = `http://localhost:${server.address().port}/`;
 // so are the ones the browser had queued behind them, before the next check starts. (The browser opens at most six
 // connections to a server like this one: a page that asks for more files than that at once, and is held, leaves the
 // rest waiting for a connection, and they'd reach the server during the next check, which would hold them and take the
-// connections that check's page needs.)
+// connections that check's page needs.) At most 10 s, so a page that asks more often than every half second can't hold
+// the run up for good.
 const unstall = async () => {
   net = 'up';
   await Promise.all(held.splice(0).map(([req, res]) => serve(req, res)));
-  while (Date.now() - lastAsked < 500) await new Promise(r => setTimeout(r, 100));
+  for (const end = Date.now() + 10000; Date.now() - lastAsked < 500 && Date.now() < end;) await new Promise(r => setTimeout(r, 100));
 };
 // Waits for ok() to come true, for up to ms, or fails saying what didn't happen.
 const until = async (ok, ms, what) => {
