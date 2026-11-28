@@ -268,14 +268,16 @@ function sendAgain() {
 
 // A tenant's or a visitor's note from a public page: kept short, counted per hour, and emailed to you. Only a real one
 // counts towards the hour (not an empty one, nor the hidden field only robots fill in). The answer says whether the
-// email went (emailed: false when today's share is used up or Google refused it), so the page can say "call".
+// email went (emailed: false when today's share is used up or Google refused it), so the page can say "call". The
+// same words from the same page as one in the last hour are kept, marked repeat, but not emailed again: the answer
+// says when the first went (firstAt), for a tenant who sent it again thinking it hadn't gone.
 function report(name, doc) {
   const max = PUBLIC_REPORT[name];
   if (!max) return { ok: false, error: 'not public' };
   doc = doc || {};
   if (doc.website) return { ok: true }; // the hidden field only robots fill in
   const clean = {};
-  ['system', 'systemName', 'kind', 'name', 'contact', 'text'].forEach(function (f) { if (doc[f]) clean[f] = String(doc[f]).slice(0, f === 'text' ? 2000 : 120); });
+  ['system', 'kind', 'name', 'contact', 'text'].forEach(function (f) { if (doc[f]) clean[f] = String(doc[f]).slice(0, f === 'text' ? 2000 : 120); });
   if (!clean.text) return { ok: false, error: 'empty report' };
   // Over the hour's share: turned down before waiting for the lock that every phone's save, Pinch and Home Assistant
   // need (anyone can post a report), and counted again under it.
@@ -284,27 +286,59 @@ function report(name, doc) {
   if (full()) return { ok: false, error: TOO_MANY };
   clean.at = new Date().toISOString();
   clean.status = 'new';
+  // the page by its own name in the manual, never the name the report carried (anyone can post one)
+  clean.systemName = pageName(name, clean.system);
   const day = clean.at.slice(0, 10);
   const props = PropertiesService.getScriptProperties();
-  let mailOk = false;
+  let mailOk = false, first = '';
   // Counted, kept and given today's email slot under the lock, so two at once can't both take the last one.
   const saved = locked(function () {
     if (full()) return false;
     cache.put(hour, String(Number(cache.get(hour) || 0) + 1), 3600);
+    first = sentAt(name, clean);
+    if (first) clean.repeat = true;
     write({ op: 'add', app: name.split('.')[0], coll: name.split('.')[1], doc: clean });
     const was = String(props.getProperty('MAILED') || '').split(' '), mailed = was[0] === day ? Number(was[1]) || 0 : 0;
-    if (mailed < MAIL_PER_DAY) { mailOk = true; props.setProperty('MAILED', day + ' ' + (mailed + 1)); }
+    if (!first && mailed < MAIL_PER_DAY) { mailOk = true; props.setProperty('MAILED', day + ' ' + (mailed + 1)); }
     return true;
   });
   if (!saved) return { ok: false, error: TOO_MANY };
+  if (first) return { ok: true, emailed: false, repeat: true, firstAt: first };
   let emailed = false;
   try {
     const to = SpreadsheetApp.getActive().getSheetByName('About').getRange('B3').getValue();
     if (to && mailOk && MailApp.getRemainingDailyQuota() > 0) {
-      MailApp.sendEmail(String(to), 'House manual: ' + (clean.kind || 'note') + ' — ' + (clean.systemName || clean.system || 'general'),
-        [clean.text, '', 'From: ' + (clean.name || '(no name)') + ' ' + (clean.contact || ''), 'System: ' + (clean.systemName || clean.system || '-'), 'At: ' + clean.at].join('\n'));
+      const kind = KINDS.indexOf(clean.kind) >= 0 ? clean.kind : 'note';
+      // a sticker with no page says which sticker, if it's one a sticker can be
+      const where = clean.systemName || (STICKER.test(clean.system || '') && FRONT.indexOf(clean.system) < 0
+        ? 'general (sticker h/' + clean.system + ', which has no page in the manual)' : 'general');
+      MailApp.sendEmail(String(to), 'House manual: ' + kind + ' — ' + (clean.systemName || 'general'),
+        [clean.text, '', 'From: ' + (clean.name || '(no name)') + ' ' + (clean.contact || ''), 'System: ' + where, 'At: ' + clean.at].join('\n'));
       emailed = true;
     }
   } catch (e) { /* the report is saved even if the email fails */ }
   return { ok: true, emailed: emailed };
+}
+const KINDS = ['Problem', 'Service visit', 'Question'];         // the report form's three
+const FRONT = ['', 'house', 'home'];                            // the front page
+const STICKER = /^[a-z0-9][a-z0-9-]{0,39}$/;                    // what a sticker's id can be
+const SITE = { 'placard.reports': 'placard.site' };             // where the pages a report names are
+// A page's own name: '' for the front page, a deleted page or an id that isn't a page.
+function pageName(name, id) {
+  if (!SITE[name] || FRONT.indexOf(String(id || '')) >= 0) return '';
+  const d = getDoc(SITE[name], String(id));
+  if (!d || d._deleted || d._bad) return '';
+  return (typeof d.name === 'string' && d.name.trim() ? d.name.trim() : String(id)).slice(0, 120);
+}
+// When the same report (same page, same words, any capitals or spacing) was first sent in the last hour, or '': not
+// one marked repeat or handled since.
+function sentAt(name, clean) {
+  const words = function (t) { return String(t || '').replace(/\s+/g, ' ').trim().toLowerCase(); };
+  const since = Date.now() - 3600e3, text = words(clean.text), page = String(clean.system || '');
+  let first = '';
+  list(name, 0, null).forEach(function (d) {
+    if (d._deleted || d.repeat || d.status === 'handled' || String(d.system || '') !== page || words(d.text) !== text) return;
+    if (Date.parse(d.at) >= since && (!first || String(d.at) < first)) first = String(d.at);
+  });
+  return first;
 }

@@ -230,7 +230,7 @@ test('only Placard\'s site is public, and public reports are kept, limited and e
   assert.equal(get(g, { op: 'pub', app: 'placard', coll: 'site' }).docs[0].title, 'House manual');
   assert.equal(get(g, { op: 'pub', app: 'larder', coll: 'items' }).error, 'not public');
   assert.equal(post(g, { op: 'report', app: 'placard', coll: 'reports', doc: { system: 'water-heater', text: 'Drip under the tank', name: 'Pat' } }).ok, true);
-  assert.equal(mail.length, 1); assert.match(mail[0][1], /water-heater/);
+  assert.equal(mail.length, 1); assert.match(mail[0][2], /^System: general \(sticker h\/water-heater, which has no page in the manual\)$/m);
   assert.equal(post(g, { op: 'report', app: 'placard', coll: 'reports', doc: { text: 'spam', website: 'x' } }).ok, true);
   assert.equal(mail.length, 1, 'the robot field is dropped');
   assert.equal(post(g, { op: 'report', app: 'larder', coll: 'items', doc: { text: 'x' } }).error, 'not public');
@@ -263,6 +263,58 @@ test('a report over the hour\'s 30 is turned down without waiting for the lock e
   assert.deepEqual(locks, [], 'a report over the cap took the script lock');
 });
 
+test('a report\'s email names its page by the page\'s own name, never the name the report carried', () => {
+  const { g, props, mail } = fakeGoogle();
+  g.setup();
+  const key = props.KEY;
+  post(g, { key, op: 'put', app: 'placard', coll: 'site', id: 'water-heater', doc: { name: 'Water heater', kind: 'water' } });
+  post(g, { key, op: 'put', app: 'placard', coll: 'site', id: 'old-boiler', doc: { name: 'Old boiler' } });
+  post(g, { key, op: 'del', app: 'placard', coll: 'site', id: 'old-boiler' });
+  const send = doc => post(g, { op: 'report', app: 'placard', coll: 'reports', doc });
+  const line = (m, k) => m[2].split('\n').find(l => l.startsWith(k + ': '));
+  // anyone can post one: a made-up name and kind reach neither the subject nor the System line
+  send({ system: 'water-heater', systemName: 'URGENT: wire $500 to fix it', kind: 'Pay now', text: 'Drip under the tank' });
+  assert.equal(mail[0][1], 'House manual: note — Water heater');
+  assert.equal(line(mail[0], 'System'), 'System: Water heater');
+  send({ system: 'water-heater', systemName: 'Water heater', kind: 'Service visit', text: 'Flushed the tank' });
+  assert.equal(mail[1][1], 'House manual: Service visit — Water heater');
+  // the front page, a deleted page and a sticker with no page are general; the sticker's id is said, if it is one
+  send({ system: '', kind: 'Problem', text: 'Porch light out' });
+  send({ system: 'old-boiler', systemName: 'Old boiler', kind: 'Problem', text: 'It is making a noise' });
+  send({ system: 'Click http://example.com', systemName: 'x', kind: 'Question', text: 'Hello' });
+  assert.deepEqual(mail.slice(2).map(m => [m[1], line(m, 'System')]), [
+    ['House manual: Problem — general', 'System: general'],
+    ['House manual: Problem — general', 'System: general (sticker h/old-boiler, which has no page in the manual)'],
+    ['House manual: Question — general', 'System: general']]);
+  // and what's kept for the Reports screen is the page's own name too
+  const kept = post(g, { key, op: 'list', app: 'placard', coll: 'reports', since: 0 }).docs;
+  assert.deepEqual(kept.map(r => r.systemName || ''), ['Water heater', 'Water heater', '', '', '']);
+  assert.equal(kept[0].system, 'water-heater');
+});
+
+test('the same report from the same page twice in an hour is kept once more but not emailed again, and the page is told when it went', () => {
+  const { g, props, mail } = fakeGoogle();
+  g.setup();
+  const RealDate = Date;
+  let t = RealDate.UTC(2026, 10, 27, 7, 19);
+  g.Date = class extends RealDate { constructor(...a) { super(...(a.length ? a : [t])); } static now() { return t; } };
+  const key = props.KEY;
+  post(g, { key, op: 'put', app: 'placard', coll: 'site', id: 'water-heater', doc: { name: 'Water heater' } });
+  const send = (text, system = 'water-heater') => post(g, { op: 'report', app: 'placard', coll: 'reports', doc: { system, text, kind: 'Problem' } });
+  assert.deepEqual(send('No hot water since this morning'), { ok: true, emailed: true });
+  t += 20 * 60000;
+  assert.deepEqual(send('  no hot water   since this morning '), { ok: true, emailed: false, repeat: true, firstAt: '2026-11-27T07:19:00.000Z' });
+  assert.equal(mail.length, 1, 'the same report was emailed twice');
+  // another page, other words, or after the hour: emailed
+  assert.equal(send('No hot water since this morning', 'well-pump').emailed, true);
+  assert.equal(send('No hot water at all now').emailed, true);
+  t += 45 * 60000;
+  assert.deepEqual(send('No hot water since this morning'), { ok: true, emailed: true });
+  assert.equal(mail.length, 4);
+  const kept = post(g, { key, op: 'list', app: 'placard', coll: 'reports', since: 0 }).docs;
+  assert.deepEqual(kept.map(r => !!r.repeat), [false, true, false, false, false], 'every report is kept, the repeat marked');
+});
+
 test('a report says whether the email went: at most 20 a day, never past Google\'s quota, and kept either way', () => {
   const { g, props, mail } = fakeGoogle();
   g.setup();
@@ -271,7 +323,8 @@ test('a report says whether the email went: at most 20 a day, never past Google\
   // one day (the day's cap counts UTC days: run after 23:00 UTC, the hour's shift crossed into the next one)
   let shift = RealDate.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), 10) - RealDate.now();
   g.Date = class extends RealDate { constructor(...a) { super(...(a.length ? a : [RealDate.now() + shift])); } static now() { return RealDate.now() + shift; } };
-  const send = (text = 'Drip') => post(g, { op: 'report', app: 'placard', coll: 'reports', doc: { text } });
+  let n = 0;   // each its own words: the same words again within the hour aren't emailed twice
+  const send = (text = 'Drip ' + ++n) => post(g, { op: 'report', app: 'placard', coll: 'reports', doc: { text } });
   const kept = () => post(g, { key: props.KEY, op: 'list', app: 'placard', coll: 'reports', since: 0 }).docs.length;
   assert.deepEqual(send(), { ok: true, emailed: true });
   assert.equal(mail.length, 1);
