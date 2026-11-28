@@ -12,6 +12,8 @@ const PUBLIC_REPORT = { 'placard.reports': 30 };      // anyone may add to these
 // script you run: developers.google.com/apps-script/guides/services/quotas. Past this a report is still kept.
 const MAIL_PER_DAY = 20;
 const HEAD = ['id', 'updated', 'deleted', 'json'];
+// Collections whose ids are numbers written with two digits (tote 01, pack 07): see mend().
+const NUMBERED = ['mothball.totes', 'packrat.packs'];
 
 function setup() {
   const props = PropertiesService.getScriptProperties();
@@ -134,7 +136,7 @@ function newest(rs) {
 function list(name, since, match) {
   const s = tab(name, false);
   if (!s) return [];
-  return newest(rows(s).filter(function (r) { return r[0] !== ''; })).filter(function (r) { return (Number(r[1]) || 0) > since; }).map(parse).filter(function (d) {
+  return newest(mended(name, s).filter(function (r) { return r[0] !== ''; })).filter(function (r) { return (Number(r[1]) || 0) > since; }).map(parse).filter(function (d) {
     if (!match || d._deleted) return true;
     for (const k in match) if (d[k] !== match[k]) return false;
     return true;
@@ -143,8 +145,35 @@ function list(name, since, match) {
 function getDoc(name, id) {
   const s = tab(name, false);
   if (!s) return null;
-  const r = newest(rows(s).filter(function (r) { return String(r[0]) === id; }))[0];
+  const r = newest(mended(name, s).filter(function (r) { return String(r[0]) === id; }))[0];
   return r ? parse(r) : null;
+}
+
+// Version 1.0 of this script didn't keep ids as text, so a sheet it wrote holds the tote number 01 as the number 1,
+// which lists as "1": a device that has only listed it sees no tote 01 and offers to set one up over it. The first
+// list of totes or packs once 1.1 is pasted writes each such row back as 01 and stamps it, with a deleted "1" beside
+// it, so every phone fetches 01 at its next sync and drops the "1" it listed. (A row with a 01 of its own beside it is
+// left as it is.) rows(s), after that.
+const oldNumber = function (x) { return typeof x === 'number' && x >= 0 && x <= 9 && x === Math.floor(x); };
+function mended(name, s) {
+  const rs = rows(s);
+  if (NUMBERED.indexOf(name) < 0) return rs;
+  const ids = rs.map(function (r) { return r[0]; });
+  if (!ids.some(function (x) { return oldNumber(x) && ids.indexOf('0' + x) < 0; })) return rs;
+  locked(function () { mend(s); });
+  return rows(s);
+}
+function mend(s) {
+  const n = s.getLastRow() - 1;
+  if (n < 1) return;
+  const ids = s.getRange(2, 1, n, 1).getValues().map(function (r) { return r[0]; });
+  const now = Date.now();
+  ids.forEach(function (x, i) {
+    if (!oldNumber(x) || ids.indexOf('0' + x) >= 0) return;
+    asText(s, i + 2); s.getRange(i + 2, 1, 1, 2).setValues([['0' + x, now]]);
+    ids[i] = '0' + x;
+    if (ids.indexOf(String(x)) < 0) { asText(s, s.getLastRow() + 1); s.appendRow([String(x), now, true, '']); ids.push(String(x)); }
+  });
 }
 
 // One write: put (replace the record), del (mark it deleted) or add (a new record, id made up if missing).

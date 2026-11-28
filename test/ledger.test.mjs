@@ -137,34 +137,72 @@ test('tote and pack numbers stay text: 01 is saved twice as one row and lists ba
   assert.equal(post(g, { key, op: 'list', app: 'placard', coll: 'reports', since: 0 }).docs[0].id, rep.id);
 });
 
+// Version 1.0 made tabs with no text format and wrote ids as they came, so the Sheet kept the tote number 01 as 1.
+function v10Totes(g, name = 'mothball.totes', rows = [['01', 1000, false, '{"name":"Lights"}'], ['02', 1000, false, '{"name":"Wreaths"}']]) {
+  const s = g.SpreadsheetApp.getActive().insertSheet(name);
+  s.appendRow(['id', 'updated', 'deleted', 'json']);
+  for (const r of rows) s.appendRow(r);
+  return s;
+}
+
 test('a tote saved as 01 by version 1.0 of the script (stored as the number 1) is the same record once 1.1 is pasted', async () => {
-  const { g, props, sheets, open } = await world();
+  const { g, props, open } = await world();
   const key = props.KEY;
-  // version 1.0 made tabs with no text format and wrote ids as they came, so the Sheet kept the tote number 01 as 1
-  const v10 = sheets['mothball.totes'] = g.SpreadsheetApp.getActive().insertSheet('mothball.totes');
-  v10.appendRow(['id', 'updated', 'deleted', 'json']);
-  v10.appendRow(['01', 1000, false, '{"name":"Lights"}']);
-  v10.appendRow(['02', 1000, false, '{"name":"Wreaths"}']);
+  const v10 = v10Totes(g);
   assert.deepEqual(v10.data.slice(1).map(r => r[0]), [1, 2], 'the pretend Sheet should store them as numbers, as a real one does');
-  // a phone that synced then lists totes "1" and "2"
+  // 1.1 pasted over it; tote 01 saved again from a phone: the same row, now the text 01
   const phone = open('mothball');
   await phone.sync(['totes']);
-  assert.deepEqual(phone.docs('totes').map(d => d.id).sort(), ['1', '2']);
-  // 1.1 pasted over it; tote 01 saved again: the same row, now the text 01, and phones drop the "1" they listed
   phone.put('totes', { id: '01', name: 'Lights and wreaths' });
   await phone.sync(['totes']);
   const live = v10.data.slice(1).filter(r => r[2] !== true);
-  assert.deepEqual(live.map(r => r[0]), ['01', 2], 'tote 01 is in the sheet twice (the 1.0 row and a new one)');
+  assert.deepEqual(live.map(r => r[0]), ['01', '02'], 'tote 01 is in the sheet twice (the 1.0 row and a new one)');
   assert.equal(JSON.parse(live[0][3]).name, 'Lights and wreaths');
-  assert.deepEqual(post(g, { key, op: 'list', app: 'mothball', coll: 'totes', since: 0 }).docs.filter(d => !d._deleted).map(d => d.id), ['01', '2']);
-  assert.deepEqual(phone.docs('totes').map(d => d.id).sort(), ['01', '2'], 'the phone keeps a tote "1" beside 01');
-  // tote 02 saved from a new laptop (which lists 01 and "2"): the same, and nothing left over
-  post(g, { key, op: 'put', app: 'mothball', coll: 'totes', id: '02', doc: { name: 'Wreaths' } });
-  assert.deepEqual(v10.data.slice(1).filter(r => r[2] !== true).map(r => r[0]), ['01', '02']);
-  // an id that's really "1" (not a v1.0 01) still matches its own row, and leaves 01 alone
+  assert.deepEqual(post(g, { key, op: 'list', app: 'mothball', coll: 'totes', since: 0 }).docs.filter(d => !d._deleted).map(d => d.id), ['01', '02']);
+  assert.deepEqual(phone.docs('totes').map(d => d.id).sort(), ['01', '02']);
+  // an id that's really "1" (not a v1.0 01) gets its own row, and leaves 01 alone
   post(g, { key, op: 'put', app: 'mothball', coll: 'totes', id: '1', doc: { name: 'One' } });
   assert.equal(post(g, { key, op: 'get', app: 'mothball', coll: 'totes', id: '01' }).doc.name, 'Lights and wreaths');
   assert.equal(post(g, { key, op: 'get', app: 'mothball', coll: 'totes', id: '1' }).doc.name, 'One');
+});
+
+test('a 1.0 tote or pack row stored as the number 1 lists as 01, so no device offers to set up tote 01 over it', async t => {
+  const { g, props, open, locks } = await world();
+  const key = props.KEY;
+  const v10 = v10Totes(g, 'mothball.totes', [['01', 1000, false, '{"name":"Lights"}'], ['12', 1000, false, '{"name":"Garlands"}']]);
+  const packs = v10Totes(g, 'packrat.packs', [['07', 1000, false, '{"label":"5.0 Ah"}']]);
+  const items = v10Totes(g, 'larder.items', [['1', 1000, false, '{"name":"One"}']]);
+  // a phone that synced under 1.0 listed the number row as "1"; it made tote 01 itself, so its copy has both
+  t.mock.timers.enable({ apis: ['Date'], now: Date.now() });
+  const phone = open('mothball');
+  const v10list = { ok: true, time: Date.now(), docs: [{ id: '1', name: 'Lights', _updated: 1000 }, { id: '12', name: 'Garlands', _updated: 1000 }] };
+  phone.call = async b => (b.op === 'list' && b.coll === 'totes' ? structuredClone(v10list) : post(g, { ...b, key }));
+  await phone.sync(['totes']);
+  phone.m('totes').docs['01'] = { id: '01', name: 'Lights', _updated: 900 }; phone.save('totes');
+  delete phone.call;
+  // a laptop connected once 1.1 is pasted lists the whole tab: tote 01 is there under its own number, and "1" is gone
+  const laptop = post(g, { key, op: 'list', app: 'mothball', coll: 'totes', since: 0 }).docs;
+  assert.ok(laptop.some(d => d.id === '01' && d.name === 'Lights' && !d._deleted), 'the laptop sees no tote 01, so its sticker page offers Set up tote 01');
+  assert.deepEqual(laptop.filter(d => !d._deleted).map(d => [d.id, d.name]), [['01', 'Lights'], ['12', 'Garlands']]);
+  // the phone's next sync (not a whole one) brings 01 and drops the "1" it listed, as the row changed when it was mended
+  await phone.sync(['totes']);
+  assert.deepEqual(phone.docs('totes').map(d => [d.id, d.name]).sort(), [['01', 'Lights'], ['12', 'Garlands']]);
+  // the next day's whole list keeps 01 on the phone that made it
+  t.mock.timers.tick(25 * 3600e3);
+  await phone.sync(['totes']);
+  assert.deepEqual(phone.docs('totes').map(d => d.id).sort(), ['01', '12']);
+  // in the sheet: one row for 01, now text, and a deleted "1" for the phones that listed it; 12 as it was; packs too;
+  // other tabs' numbers are left
+  assert.deepEqual(v10.data.slice(1).map(r => [r[0], r[2]]), [['01', false], [12, false], ['1', true]]);
+  assert.deepEqual(post(g, { key, op: 'list', app: 'packrat', coll: 'packs', since: 0 }).docs.map(d => [d.id, !!d._deleted]), [['07', false], ['7', true]]);
+  assert.equal(post(g, { key, op: 'get', app: 'packrat', coll: 'packs', id: '07' }).doc.label, '5.0 Ah');
+  assert.deepEqual(post(g, { key, op: 'list', app: 'larder', coll: 'items', since: 0 }).docs.map(d => d.id), ['1']);
+  assert.equal(items.data[1][0], 1);
+  // mended once: later lists take no lock
+  locks.length = 0;
+  for (let i = 0; i < 3; i++) post(g, { key, op: 'list', app: 'mothball', coll: 'totes', since: 0 });
+  assert.deepEqual(locks, [], 'every list of totes waits for the lock');
+  assert.ok(packs.data.length >= 2);
 });
 
 test('Switchboard asks for the same script version as ledger/Code.gs is', () => {
@@ -293,7 +331,7 @@ const URL_ = 'https://script.google.com/macros/s/X/exec';
 async function world() {
   globalThis.localStorage = store();
   const { Ledger } = await import('../js/kit/ledger.js');
-  const { g, props, sheets } = fakeGoogle();
+  const { g, props, sheets, locks, mail, cache } = fakeGoogle();
   g.setup();
   const net = { up: true, hold: null, hang: false, calls: 0, fail: null };
   // hold(body) may return a promise: the request is applied when it resolves, then answered. hang: Google takes the
@@ -309,7 +347,7 @@ async function world() {
   };
   const open = (app = 'frostbite') => { const l = new Ledger(app, { fetchImpl }); opened.push(l); if (!l.connected) l.setConfig(URL_, props.KEY); return l; };
   const sheet = (app, coll) => Object.fromEntries(post(g, { key: props.KEY, op: 'list', app, coll, since: 0 }).docs.map(d => [d.id, d]));
-  return { g, props, sheets, net, open, sheet, Ledger };
+  return { g, props, sheets, locks, mail, cache, net, open, sheet, Ledger };
 }
 const tick = () => new Promise(r => setImmediate(r));
 
