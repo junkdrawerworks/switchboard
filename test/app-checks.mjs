@@ -268,9 +268,22 @@ export async function appChecks({ page, ctx, base, assert, problems }) {
   // the test tag's landing note
   await page.goto('about:blank'); await page.goto(base + '#test');
   assert.equal(await page.locator('#test-ok').isHidden(), false, 'the test tag note shows');
+  await page.waitForFunction(() => document.querySelector('#ledger-state').textContent === 'Connected to ledger v1.1');
+  // Forget asks first, with the red button; Cancel keeps the address and key
+  await page.click('#ledger-forget');
+  const ask = page.getByRole('dialog', { name: 'Forget the ledger on this device?' });
+  await ask.waitFor();
+  assert.equal(await ask.locator('form > p').textContent(), 'Switchboard stops offering Connect here. The apps stay connected. To set it up again you need the web app address and the key from the sheet\'s About tab.');
+  assert.deepEqual(await ask.locator('button[type=submit]').evaluate(b => [b.textContent, b.className]), ['Forget', 'btn danger']);
+  await ask.locator('button', { hasText: 'Cancel' }).click();
+  assert.deepEqual([await page.inputValue('#lurl'), await page.inputValue('#lkey')], ['https://script.google.com/macros/s/AKfyTEST/exec', 'n'.repeat(40)], 'Cancel forgot the ledger');
+  assert.deepEqual(await state(), ['sync synced', 'Connected to ledger v1.1']);
   // forgotten, so nothing after this asks Google
   await page.click('#ledger-forget');
+  await page.click('dialog[open] button[type=submit]');
+  await page.waitForSelector('.toast.show >> text=Forgotten on this device.');
   assert.deepEqual(await state(), ['sync unset', 'Not connected to the ledger']);
+  assert.equal(await page.inputValue('#lurl'), '');
   await page.unroute('https://script.google.com/**');
   for (let i = problems.length - 1; i >= from; i--) if (/script\.google\.com|Failed to load resource: net::ERR_INTERNET_DISCONNECTED/.test(problems[i])) problems.splice(i, 1);
 }

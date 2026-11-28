@@ -1,4 +1,4 @@
-import { $, h, mount, toast, buzz } from './kit/ui.js';
+import { $, h, mount, toast, buzz, confirmSheet } from './kit/ui.js';
 import { APPS, parseTag, resolve, tagUrl } from './kit/tags.js';
 import { Ledger, connectLink } from './kit/ledger.js';
 import { readOnce, explainNfc, nfcSupported, cancelNfc } from './kit/nfc.js';
@@ -107,7 +107,13 @@ $('#ledger-form').addEventListener('submit', async e => {
   }
   renderLedger();
 });
-$('#ledger-forget').addEventListener('click', () => { ledger.forget(); answer = null; fillFields(); renderLedger(); });
+// Forget asks first: setting it up again on a phone means finding the web app address in Apps Script and the key in the
+// sheet. The apps keep their own connection.
+$('#ledger-forget').addEventListener('click', async () => {
+  if (!await confirmSheet('Forget the ledger on this device?', 'Switchboard stops offering Connect here. The apps stay connected. To set it up again you need the web app address and the key from the sheet\'s About tab.', 'Forget', { danger: true })) return;
+  ledger.forget(); answer = null; fillFields(); renderLedger();
+  toast('Forgotten on this device.');
+});
 
 function renderApps() {
   const list = $('#app-list');
