@@ -192,6 +192,10 @@ export async function kitChecks({ browser, base, assert }) {
         await page.waitForTimeout(2300);
         assert.equal(await page.locator('#toast.show').count(), 1, 'a short toast went before 2.6 s');
         await sheetBarChecks(page, assert);
+        // the footer's Privacy link: the tag apps' own page on Switchboard's site, which says what goes to the Google
+        // Sheet and what a house manual report sends (the junk drawer's says nothing leaves the browser)
+        const privacy = await page.evaluate(() => [...document.querySelectorAll('.jd-foot a')].find(a => a.textContent === 'Privacy')?.href);
+        assert.ok(['https://tag.junkdrawer.works/privacy.html', new URL('privacy.html', base).href].includes(privacy), `the footer's Privacy link goes to ${privacy}`);
       }
       // the sample's way out (in every app that has a sample): at least 44 px tall
       if (await page.evaluate(() => fetch('js/app.js').then(r => r.text()).then(t => t.includes('sampleLink')))) {

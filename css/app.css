@@ -6,3 +6,5 @@
 #another-qr svg { display: block; width: min(260px, 100%); height: auto; margin: 10px 0; border-radius: 8px; }
 /* The Letters table on the narrowest phones (320 px): tighter cells, so "junkdrawer." fits beside the app names. */
 @media (max-width: 359px) { #routes .tbl th, #routes .tbl td { padding-left: 4px; padding-right: 4px; } }
+/* The privacy page: one screen of plain words. */
+.privacy .crumb { margin-top: 0; } .privacy .lead { font-size: 19px; } .privacy h2 { margin-top: 22px; }
