@@ -27,6 +27,7 @@ function setup() {
   const ss = SpreadsheetApp.getActive();
   const about = ss.getSheetByName('About') || ss.insertSheet('About', 0);
   // the sheet's collection tabs, as the tabs this script has made (see tab()): a sheet set up before the list was kept
+  tabsRead = null;
   const tabs = madeTabs(props);
   ss.getSheets().forEach(function (s) { if (TAB.test(s.getName()) && tabs.indexOf(s.getName()) < 0) tabs.push(s.getName()); });
   props.setProperty('TABS', tabs.join(' '));
@@ -61,6 +62,7 @@ function doPost(e) {
 function out(o) { return ContentService.createTextOutput(JSON.stringify(o)).setMimeType(ContentService.MimeType.JSON); }
 
 function handle(q) {
+  tabsRead = null;   // see madeTabs()
   try {
     const op = q.op || 'ping';
     const name = q.app && q.coll ? String(q.app) + '.' + String(q.coll) : '';
@@ -127,20 +129,30 @@ function locked(fn) {
   try { return fn(); } finally { SpreadsheetApp.flush(); lock.releaseLock(); }
 }
 
-// The collection tabs this script has made (script property TABS; setup() adds the sheet's own). A write to one that has
-// since gone from the sheet (renamed or deleted by hand) is turned down, rather than starting it again with only that
-// record, which every phone's next whole list would then take as all there is: the app's status line says why, the
-// write waits on the phone, and it goes once the tab is back. Public reports start their tab again.
-function madeTabs(props) { return String((props || PropertiesService.getScriptProperties()).getProperty('TABS') || '').split(' ').filter(String); }
+// The collection tabs this script has made or written to (script property TABS; setup() adds the sheet's own). A write
+// to one that has since gone from the sheet (renamed or deleted by hand, or not in a version restored) is turned down,
+// rather than starting it again with only that record, which every phone's next whole list would then take as all
+// there is: the app's status line says why, the write waits on the phone, and it goes once the tab is back. Public
+// reports start their tab again. The list is read once a request (a batch of 100 writes reads it once): handle() and
+// setup() start afresh.
+let tabsRead = null;
+function madeTabs(props) {
+  return tabsRead || (tabsRead = String((props || PropertiesService.getScriptProperties()).getProperty('TABS') || '').split(' ').filter(String));
+}
 function tab(name, create) {
   const ss = SpreadsheetApp.getActive();
   let s = ss.getSheetByName(name);
-  if (!s && create) {
-    const props = PropertiesService.getScriptProperties(), made = madeTabs(props);
-    if (made.indexOf(name) >= 0 && !PUBLIC_REPORT[name]) throw new Error('the sheet has no ' + name + ' tab: rename it back');
+  if (!create) return s;
+  const props = PropertiesService.getScriptProperties(), made = madeTabs(props);
+  if (!s) {
+    if (made.indexOf(name) >= 0 && !PUBLIC_REPORT[name]) throw new Error('the sheet has no ' + name + ' tab: rename it back, or add an empty tab named ' + name);
     s = ss.insertSheet(name);
-    if (made.indexOf(name) < 0) props.setProperty('TABS', made.concat(name).join(' '));
-    // Plain text, so a Sheet keeps ids such as 01 (a tote number) as typed instead of turning them into the number 1
+  }
+  // noted when written to, so a tab from before the list was kept (a sheet 1.0 set up) is one too
+  if (made.indexOf(name) < 0) { made.push(name); props.setProperty('TABS', made.join(' ')); }
+  // A new tab, or an empty one added by hand in place of one that's gone: set up, so its first record isn't read as the
+  // header row. Plain text, so a Sheet keeps ids such as 01 (a tote number) as typed instead of turning them into 1.
+  if (s.getLastRow() === 0) {
     s.getRange('A:A').setNumberFormat('@');
     s.getRange('D:D').setNumberFormat('@');
     s.getRange(1, 1, 1, 4).setValues([HEAD]).setFontWeight('bold');

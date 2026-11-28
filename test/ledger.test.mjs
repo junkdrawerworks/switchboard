@@ -1387,7 +1387,7 @@ test('a tab renamed or deleted by hand, then a save: the save waits and says why
   t.mock.timers.tick(25 * 3600e3); await a.sync(['totes']);
   a.put('totes', { ...a.doc('totes', '02'), note: 'top shelf' }); await a.flush();
   assert.equal(sheets['mothball.totes'], undefined, 'the save started the tab again with only its record');
-  assert.equal(a.statusText(), 'The ledger said no (the sheet has no mothball.totes tab: rename it back) — 1 waiting');
+  assert.equal(a.statusText(), 'The ledger said no (the sheet has no mothball.totes tab: rename it back, or add an empty tab named mothball.totes) — 1 waiting');
   t.mock.timers.tick(60e3); await a.sync(['totes']);
   assert.deepEqual(a.docs('totes').map(d => d.id).sort(), ['01', '02', '03'], 'records left the phone');
   assert.equal(a.pending, 1);
@@ -1410,7 +1410,7 @@ test('the tabs the script made are kept as it makes them, setup adds the sheet\'
   assert.deepEqual(props.TABS.split(' ').sort(), ['frostbite.items', 'packrat.packs'], 'setup didn\'t list the sheet\'s own tabs');
   delete sheets['frostbite.items'];
   assert.deepEqual(post(g, { key, op: 'put', app: 'frostbite', coll: 'items', id: 'k3m9p', doc: { name: 'Beef stew' } }),
-    { ok: false, error: 'the sheet has no frostbite.items tab: rename it back' });
+    { ok: false, error: 'the sheet has no frostbite.items tab: rename it back, or add an empty tab named frostbite.items' });
   assert.equal(sheets['frostbite.items'], undefined);
   // a collection no app has saved to yet still gets its tab
   assert.equal(post(g, { key, op: 'put', app: 'frostbite', coll: 'zones', id: 'top', doc: { name: 'Top basket' } }).ok, true);
@@ -1419,6 +1419,46 @@ test('the tabs the script made are kept as it makes them, setup adds the sheet\'
   delete sheets['placard.reports'];
   assert.equal(post(g, { op: 'report', app: 'placard', coll: 'reports', doc: { text: 'Still no hot water' } }).ok, true);
   assert.equal(post(g, { key, op: 'list', app: 'placard', coll: 'reports', since: 0 }).docs.length, 1);
+});
+
+test('an empty tab added by hand in place of a deleted one is set up as a new one: the waiting save goes into it, and it lists', () => {
+  const { g, props, sheets } = fakeGoogle();
+  g.setup();
+  const key = props.KEY, put = id => post(g, { key, op: 'put', app: 'mothball', coll: 'totes', id, doc: { name: 'Tote ' + id } });
+  assert.equal(put('01').ok, true);
+  delete sheets['mothball.totes'];                                   // deleted by hand: nothing to rename back
+  assert.deepEqual(put('02'), { ok: false, error: 'the sheet has no mothball.totes tab: rename it back, or add an empty tab named mothball.totes' });
+  g.SpreadsheetApp.getActive().insertSheet('mothball.totes');        // the + at the bottom of the sheet: a blank tab
+  assert.equal(put('02').ok, true, 'the waiting save was turned down again');
+  assert.equal(put('03').ok, true);
+  assert.deepEqual(post(g, { key, op: 'list', app: 'mothball', coll: 'totes', since: 0 }).docs.map(d => d.id), ['02', '03'], 'a record went into the header row');
+  const s = sheets['mothball.totes'];
+  assert.deepEqual(s.data[0], ['id', 'updated', 'deleted', 'json']);
+  assert.deepEqual([s.colFmt[1], s.colFmt[4]], ['@', '@'], 'its id and json columns aren\'t plain text');
+});
+
+test('a sheet 1.0 set up, with 1.1 pasted and setup not run again: a save notes its tab, so once renamed it is refused, not started again', () => {
+  const { g, props, sheets } = fakeGoogle();
+  g.setup();
+  const key = props.KEY;
+  post(g, { key, op: 'put', app: 'placard', coll: 'site', id: 'water-heater', doc: { name: 'Water heater' } });
+  post(g, { key, op: 'put', app: 'mothball', coll: 'totes', id: '01', doc: { name: 'Lights' } });
+  delete props.TABS;                                                 // 1.0 kept no list of its tabs
+  // a save to a tab that's there notes it, reading the list once for a whole batch
+  const real = g.PropertiesService;
+  let reads = 0;
+  g.PropertiesService = { getScriptProperties: () => { const p = real.getScriptProperties(); return { ...p, getProperty: k => { if (k === 'TABS') reads++; return p.getProperty(k); } }; } };
+  assert.equal(post(g, { key, op: 'batch', ops: ['01', '02', '03'].map(id => ({ op: 'put', app: 'mothball', coll: 'totes', id, doc: { name: 'Tote ' + id } })) }).ok, true);
+  g.PropertiesService = real;
+  assert.equal(reads, 1, 'the list of tabs was read for each write in the batch');
+  post(g, { key, op: 'put', app: 'placard', coll: 'site', id: 'water-heater', doc: { name: 'Water heater', where: 'Basement' } });
+  assert.deepEqual(String(props.TABS).split(' ').sort(), ['mothball.totes', 'placard.site'], 'a save didn\'t note the tab it went to');
+  // renamed by hand: the tenants' read is an error (their phones keep the manual), and a save waits
+  sheets['placard.site (old)'] = sheets['placard.site']; delete sheets['placard.site'];
+  assert.deepEqual(get(g, { op: 'pub', app: 'placard', coll: 'site' }), { ok: false, error: 'the sheet has no placard.site tab' }, 'every tenant\'s manual would be emptied');
+  delete sheets['mothball.totes'];
+  assert.equal(post(g, { key, op: 'put', app: 'mothball', coll: 'totes', id: '02', doc: { name: 'Wreaths' } }).ok, false);
+  assert.equal(sheets['mothball.totes'], undefined, 'the save started the tab again with only its record');
 });
 
 test('with "Reports go to" (B3) emptied after setup, a report is kept and says it wasn\'t emailed, and nothing is sent', () => {
