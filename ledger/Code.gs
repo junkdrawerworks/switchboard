@@ -26,6 +26,10 @@ function setup() {
   }
   const ss = SpreadsheetApp.getActive();
   const about = ss.getSheetByName('About') || ss.insertSheet('About', 0);
+  // the sheet's collection tabs, as the tabs this script has made (see tab()): a sheet set up before the list was kept
+  const tabs = madeTabs(props);
+  ss.getSheets().forEach(function (s) { if (TAB.test(s.getName()) && tabs.indexOf(s.getName()) < 0) tabs.push(s.getName()); });
+  props.setProperty('TABS', tabs.join(' '));
   // who gets the reports: kept when it already holds an address (yours and the property manager's, say)
   const to = String(about.getRange('B3').getValue() || '').trim();
   about.getRange('A1:B5').setValues([
@@ -120,11 +124,19 @@ function locked(fn) {
   try { return fn(); } finally { SpreadsheetApp.flush(); lock.releaseLock(); }
 }
 
+// The collection tabs this script has made (script property TABS; setup() adds the sheet's own). A write to one that has
+// since gone from the sheet (renamed or deleted by hand) is turned down, rather than starting it again with only that
+// record, which every phone's next whole list would then take as all there is: the app's status line says why, the
+// write waits on the phone, and it goes once the tab is back. Public reports start their tab again.
+function madeTabs(props) { return String((props || PropertiesService.getScriptProperties()).getProperty('TABS') || '').split(' ').filter(String); }
 function tab(name, create) {
   const ss = SpreadsheetApp.getActive();
   let s = ss.getSheetByName(name);
   if (!s && create) {
+    const props = PropertiesService.getScriptProperties(), made = madeTabs(props);
+    if (made.indexOf(name) >= 0 && !PUBLIC_REPORT[name]) throw new Error('the sheet has no ' + name + ' tab: rename it back');
     s = ss.insertSheet(name);
+    if (made.indexOf(name) < 0) props.setProperty('TABS', made.concat(name).join(' '));
     // Plain text, so a Sheet keeps ids such as 01 (a tote number) as typed instead of turning them into the number 1
     s.getRange('A:A').setNumberFormat('@');
     s.getRange('D:D').setNumberFormat('@');

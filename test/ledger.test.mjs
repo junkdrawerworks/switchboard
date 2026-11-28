@@ -1337,6 +1337,50 @@ test('a tab deleted or renamed by hand: the next day\'s whole list keeps the pho
   assert.deepEqual(a.docs('zones'), [], 'rows deleted by hand stayed on the phone');
 });
 
+test('a tab renamed or deleted by hand, then a save: the save waits and says why, nothing leaves the phones, and it goes once the tab is back', async t => {
+  const { open, sheets, sheet } = await world();
+  t.mock.timers.enable({ apis: ['Date'], now: Date.now() });
+  const a = open('mothball');
+  for (const [id, name] of [['01', 'Lights'], ['02', 'Wreaths'], ['03', 'Inflatables']]) a.put('totes', { id, name });
+  await a.flush(); await a.sync(['totes']);
+  const kept = sheets['mothball.totes']; delete sheets['mothball.totes'];
+  t.mock.timers.tick(25 * 3600e3); await a.sync(['totes']);
+  a.put('totes', { ...a.doc('totes', '02'), note: 'top shelf' }); await a.flush();
+  assert.equal(sheets['mothball.totes'], undefined, 'the save started the tab again with only its record');
+  assert.equal(a.statusText(), 'The ledger said no (the sheet has no mothball.totes tab: rename it back) — 1 waiting');
+  t.mock.timers.tick(60e3); await a.sync(['totes']);
+  assert.deepEqual(a.docs('totes').map(d => d.id).sort(), ['01', '02', '03'], 'records left the phone');
+  assert.equal(a.pending, 1);
+  sheets['mothball.totes'] = kept;                                  // renamed back
+  await a.flush(); t.mock.timers.tick(25 * 3600e3); await a.sync(['totes']);
+  assert.equal(a.pending, 0);
+  assert.equal(sheet('mothball', 'totes')['02'].note, 'top shelf');
+  assert.deepEqual(a.docs('totes').map(d => d.id).sort(), ['01', '02', '03']);
+});
+
+test('the tabs the script made are kept as it makes them, setup adds the sheet\'s own, and reports start theirs again', () => {
+  const { g, props, sheets } = fakeGoogle();
+  g.setup();
+  const key = props.KEY;
+  // a tab from before the script kept its list: setup run again (as the merge note says) adds it
+  g.SpreadsheetApp.getActive().insertSheet('frostbite.items').appendRow(['id', 'updated', 'deleted', 'json']);
+  post(g, { key, op: 'put', app: 'packrat', coll: 'packs', id: '01', doc: { label: '5.0 Ah' } });
+  assert.deepEqual(props.TABS.split(' '), ['packrat.packs']);
+  g.setup();
+  assert.deepEqual(props.TABS.split(' ').sort(), ['frostbite.items', 'packrat.packs'], 'setup didn\'t list the sheet\'s own tabs');
+  delete sheets['frostbite.items'];
+  assert.deepEqual(post(g, { key, op: 'put', app: 'frostbite', coll: 'items', id: 'k3m9p', doc: { name: 'Beef stew' } }),
+    { ok: false, error: 'the sheet has no frostbite.items tab: rename it back' });
+  assert.equal(sheets['frostbite.items'], undefined);
+  // a collection no app has saved to yet still gets its tab
+  assert.equal(post(g, { key, op: 'put', app: 'frostbite', coll: 'zones', id: 'top', doc: { name: 'Top basket' } }).ok, true);
+  // anyone's report starts its tab again
+  post(g, { op: 'report', app: 'placard', coll: 'reports', doc: { text: 'No hot water' } });
+  delete sheets['placard.reports'];
+  assert.equal(post(g, { op: 'report', app: 'placard', coll: 'reports', doc: { text: 'Still no hot water' } }).ok, true);
+  assert.equal(post(g, { key, op: 'list', app: 'placard', coll: 'reports', since: 0 }).docs.length, 1);
+});
+
 test('the day\'s whole list keeps a record that is waiting to go, or changed here after the list was asked for', async t => {
   const { net, open, sheets, g } = await world();
   t.mock.timers.enable({ apis: ['Date'], now: Date.now() });
