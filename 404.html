@@ -5,6 +5,15 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="robots" content="noindex">
 <title>Switchboard</title>
+<script>
+// To send one sticker somewhere else, add it to OVERRIDES as 'letter/id': 'https://…', one line each with a comma after
+// it, for example 'h/water-heater': 'https://example.com/manual'. Keys are lowercased as the page loads, like the address
+// tapped, so 'H/Boiler' and 'h/boiler' are the same sticker. This script is on its own so that a mistake typed into it
+// (a comma left out, a curly quote from a phone keyboard) loses only these lines: the resolver below then sends every
+// sticker to its own app, and Switchboard's Check a tag says the mistake is here.
+var OVERRIDES = {
+};
+</script>
 <style>
   body { margin: 0; padding: 28px 16px; font: 17px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; background: #F1EFE8; color: #1D1E1B; }
   @media (prefers-color-scheme: dark) { body { background: #161714; color: #ECEAE2; } a { color: #F3C22F; } }
@@ -15,9 +24,7 @@
 <script>
 // The resolver. A sticker holds https://tag.junkdrawer.works/<letter>/<id>; GitHub Pages answers every such address
 // with this page, which sends the phone on to the app that owns the letter. Keep ROUTES and NAMES in step with
-// js/kit/tags.js (test/tags.test.mjs checks). To send one sticker somewhere else, add it to OVERRIDES as
-// 'letter/id': 'https://…', for example 'h/water-heater': 'https://example.com/manual'. Keys are lowercased as the page
-// loads, like the address tapped, so 'H/Boiler' and 'h/boiler' are the same sticker.
+// js/kit/tags.js (test/tags.test.mjs checks). OVERRIDES, in the script above, is used only if that script ran.
 var ROUTES = {
   h: 'https://placard.junkdrawer.works/',
   t: 'https://mothball.junkdrawer.works/',
@@ -27,16 +34,16 @@ var ROUTES = {
   s: 'https://tag.junkdrawer.works/'
 };
 var NAMES = { h: 'Placard', t: 'Mothball', p: 'Larder', f: 'Frostbite', m: 'Packrat', s: 'Switchboard' };
-var OVERRIDES = {
-};
 (function () {
-  var lower = {};
-  for (var k in OVERRIDES) lower[k.toLowerCase()] = OVERRIDES[k];
-  OVERRIDES = lower;
+  // OVERRIDES as its own script left it. Not declared (that script didn't compile) or not an object (it stopped with an
+  // error first) means none. Only read here, never assigned, so nothing typed there can stop this script.
+  var sent = typeof OVERRIDES === 'object' && OVERRIDES ? OVERRIDES : {}, lower = {};
+  for (var k in sent) lower[k.toLowerCase()] = sent[k];
+  window.__overrides = lower;
   var m = /^\/([a-z])\/([a-z0-9][a-z0-9-]{0,39})\/?$/i.exec(location.pathname);
   if (!m) return;
   var key = m[1].toLowerCase() + '/' + m[2].toLowerCase();
-  var to = OVERRIDES[key] || (ROUTES[m[1].toLowerCase()] ? ROUTES[m[1].toLowerCase()] + '#' + m[2].toLowerCase() : null);
+  var to = lower[key] || (ROUTES[m[1].toLowerCase()] ? ROUTES[m[1].toLowerCase()] + '#' + m[2].toLowerCase() : null);
   if (to) {
     window.__to = to;
     // Switchboard's offline copy, for a phone that only ever taps stickers (a tenant's): the next tap with no signal

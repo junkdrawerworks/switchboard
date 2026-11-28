@@ -99,18 +99,37 @@ export async function resolverChecks({ browser, assert }) {
     assert.deepEqual(await sb.evaluate(() => { const card = document.querySelector('#check'), code = card.querySelector('#check-out code');
       return { page: document.documentElement.scrollWidth, code: Math.ceil(code.getBoundingClientRect().right) <= card.getBoundingClientRect().right - parseFloat(getComputedStyle(card).paddingRight) }; }),
     { page: 390, code: true }, 'a long address in Check a tag runs off its card');
-    // a mistake typed into 404.html (a comma left out between two lines) stops every tap there: Check a tag says so,
-    // and offers no Open
+    // a mistake typed into OVERRIDES (a comma left out between two lines) loses only the overrides: a tap opens the
+    // sticker's own app, and Check a tag says where it goes, that OVERRIDES has the mistake, and Open goes there too
     srv.patch = b => b.replace('var OVERRIDES = {\n};', "var OVERRIDES = {\n  'h/water-heater': 'https://example.com/manual'\n  'h/smoke-co': 'https://example.com/alarm'\n};");
+    const typos = errors.length;
+    r = await tap('/h/water-heater');
+    assert.equal(r.url, 'https://placard.junkdrawer.works/#water-heater', `a mistake in OVERRIDES stopped a tap on ${r.url}: ${r.text.slice(0, 80)}`);
+    r = await tap('/t/01');
+    assert.equal(r.url, 'https://mothball.junkdrawer.works/#01', 'a mistake in OVERRIDES stopped a sticker it doesn\'t name');
     await sb.reload();
-    await sb.click('#check-btn');
-    await sb.waitForFunction(() => /^Listening/.test(document.querySelector('#check-msg').textContent));
-    await sb.evaluate(u => window.__nfc.tap(u), 'https://tag.junkdrawer.works/h/water-heater');
-    await sb.waitForSelector('#check-out:not([hidden])');
-    assert.deepEqual(await sb.locator('#check-out').evaluate(o => ({ cap: o.querySelector('.tape-cap').textContent,
-      said: [...o.querySelectorAll('p')].map(p => [p.className, p.textContent]), links: o.querySelectorAll('a').length })),
-    { cap: 'h / Placard', said: [['msg bad', '404.html has a mistake in it, so no sticker opens anything: every tap stops on "This tag isn\'t set up". Undo the last change to 404.html on GitHub.']], links: 0 },
-    'Check a tag offers where a sticker goes while 404.html stops every tap');
+    const said = async url => {
+      await sb.click('#check-btn');
+      await sb.waitForFunction(() => /^Listening/.test(document.querySelector('#check-msg').textContent));
+      await sb.evaluate(u => window.__nfc.tap(u), url);
+      await sb.waitForSelector('#check-out:not([hidden])');
+      return sb.locator('#check-out').evaluate(o => ({ cap: o.querySelector('.tape-cap').textContent,
+        said: [...o.querySelectorAll('p')].map(p => [p.className, p.textContent]), links: [...o.querySelectorAll('a')].map(a => a.getAttribute('href')) }));
+    };
+    assert.deepEqual(await said('https://tag.junkdrawer.works/h/water-heater'), { cap: 'h / Placard',
+      said: [['', 'Goes to https://placard.junkdrawer.works/#water-heater'], ['msg bad', 'OVERRIDES in 404.html has a mistake in it, so no sticker is sent elsewhere: each opens its own app\'s page. Undo the last change to 404.html on GitHub.']],
+      links: ['https://placard.junkdrawer.works/#water-heater'] }, 'Check a tag on a sticker while OVERRIDES has a mistake in it');
+    // a mistake in the resolver's own script stops every tap: Check a tag says so, and offers no Open
+    srv.patch = b => b.replace("  t: 'https://mothball.junkdrawer.works/',", "  t: 'https://mothball.junkdrawer.works/'");
+    r = await tap('/h/water-heater');
+    assert.match(r.text, /This tag isn't set up/, 'a tap went on with the resolver\'s script broken');
+    await sb.reload();
+    assert.deepEqual(await said('https://tag.junkdrawer.works/h/water-heater'),
+      { cap: 'h / Placard', said: [['msg bad', '404.html has a mistake in it, so no sticker opens anything: every tap stops on "This tag isn\'t set up". Undo the last change to 404.html on GitHub.']], links: [] },
+      'Check a tag offers where a sticker goes while 404.html stops every tap');
+    // the taps on a 404.html with a mistake in it said so in the console, and nothing else did
+    assert.ok(errors.length > typos && errors.slice(typos).every(e => /^Unexpected|^ROUTES is not defined$/.test(e)), 'errors on the resolver page: ' + errors.slice(typos));
+    errors.splice(typos);
     await sb.close();
     srv.patch = null;
     assert.deepEqual(errors, [], 'errors on the resolver page');

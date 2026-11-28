@@ -3,7 +3,7 @@ import { APPS, parseTag, resolve, tagUrl } from './kit/tags.js';
 import { Ledger, connectLink } from './kit/ledger.js';
 import { readOnce, explainNfc, nfcSupported, cancelNfc } from './kit/nfc.js';
 import { nfcPanel } from './kit/panel.js';
-import { readOverrides, resolverWorks } from './overrides.js';
+import { readOverrides, overridesWork, resolverWorks } from './overrides.js';
 
 const ledger = new Ledger('switchboard');
 const appOrder = ['h', 't', 'p', 'f', 'm'];
@@ -13,11 +13,13 @@ if (location.hash === '#test') { $('#test-ok').hidden = false; history.replaceSt
 
 // ---- check a tag
 // Where a sticker goes is what the resolver says: its OVERRIDES, read from 404.html (this site's own; with no signal the
-// worker's copy), then the app the letter belongs to. ok is false when 404.html won't run at all (a mistake typed into
-// it): then no tap goes anywhere. Not known (not fetched): as before.
+// worker's copy), then the app the letter belongs to. overridesOk is false when OVERRIDES's own script has a mistake in
+// it: then no sticker is sent elsewhere, and each opens its app's page. ok is false when the resolver's script won't run
+// at all: then no tap goes anywhere. Not known (not fetched): as before.
 const overrides = fetch('404.html').then(r => r.ok ? r.text() : Promise.reject(new Error(r.status)))
-  .then(t => ({ map: readOverrides(t), ok: resolverWorks(t) })).catch(() => ({ map: {}, ok: true }));
+  .then(t => ({ map: readOverrides(t), ok: resolverWorks(t), overridesOk: overridesWork(t) })).catch(() => ({ map: {}, ok: true, overridesOk: true }));
 const BROKEN = '404.html has a mistake in it, so no sticker opens anything: every tap stops on "This tag isn\'t set up". Undo the last change to 404.html on GitHub.';
+const NOT_SENT = 'OVERRIDES in 404.html has a mistake in it, so no sticker is sent elsewhere: each opens its own app\'s page. Undo the last change to 404.html on GitHub.';
 // Each press is one read. While it listens the button says Stop, and a press stops it. A read that Stop (or a newer
 // press) ended says nothing more, so its "Stopped." can't land on top of the next press's "Listening" line.
 let reading = 0, presses = 0;
@@ -32,7 +34,7 @@ checkBtn.addEventListener('click', async () => {
   msg.textContent = 'Listening. Hold the sticker flat against the back of the phone, near the top.'; msg.className = 'msg wait'; out.hidden = true;
   try {
     const { url, serial } = await readOnce();
-    const { map: sent, ok } = await overrides;
+    const { map: sent, ok, overridesOk } = await overrides;
     if (reading !== me) return;
     idle(); buzz(50);
     const t = parseTag(url);
@@ -44,6 +46,7 @@ checkBtn.addEventListener('click', async () => {
       mount(out,
         h('div', { class: 'tape-wrap' }, h('span', { class: 'tape-cap' }, `${t.letter} / ${APPS[t.letter]?.name || 'no app'}`), h('div', { class: 'tape' }, t.id)),
         !ok ? h('p', { class: 'msg bad' }, BROKEN) : to ? h('p', {}, 'Goes to ', h('code', {}, to)) : h('p', {}, 'No app owns this letter.'),
+        ok && !overridesOk ? h('p', { class: 'msg bad' }, NOT_SENT) : null,
         ok && sent[`${t.letter}/${t.id}`] ? h('p', { class: 'muted' }, 'Sent here by OVERRIDES in 404.html.') : null,
         to ? h('div', { class: 'btns' }, h('a', { class: 'btn', href: to }, 'Open')) : null);
     }

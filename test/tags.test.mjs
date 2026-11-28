@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import { APPS, parseTag, resolve, tagUrl, slug, newId, uniqueSlug } from '../js/kit/tags.js';
-import { readOverrides, resolverWorks } from '../js/overrides.js';
+import { readOverrides, overridesWork, resolverWorks } from '../js/overrides.js';
 
 test('tag links round-trip', () => {
   assert.equal(tagUrl('h', 'water-heater'), 'https://tag.junkdrawer.works/h/water-heater');
@@ -36,11 +36,12 @@ test('a made-up id is never one a sheet would read as a number (all digits, or d
   for (let i = 0; i < 20000; i++) assert.doesNotMatch(newId(i % 2 ? 6 : 5), /^\d+(e\d+)?$/);
 });
 
-// 404.html's scripts (the one in its head, then the one at the end of its body) with a pretend page. overrides: lines
-// put into OVERRIDES, as the owner would. A script that throws stops there and the next one still runs, as in a browser
-// (errors: what each said).
-function runResolver(pathname, overrides = '') {
-  let html = readFileSync(new URL('../404.html', import.meta.url), 'utf8');
+// 404.html's scripts (OVERRIDES's and the resolver's in its head, then the one at the end of its body) with a pretend
+// page. overrides: lines put into OVERRIDES, as the owner would. A script that throws stops there and the next one still
+// runs, as in a browser (errors: what each said). overrides in the answer: the ones the resolver used, lowercased.
+// patch: a change to the rest of the file.
+function runResolver(pathname, overrides = '', patch = html => html) {
+  let html = patch(readFileSync(new URL('../404.html', import.meta.url), 'utf8'));
   if (overrides) html = html.replace('var OVERRIDES = {\n};', `var OVERRIDES = {\n${overrides}\n};`);
   const els = { title: { textContent: 'This tag isn\'t set up' }, app: { hidden: true } };
   const el = id => (els[id] ||= { textContent: '', href: '' });
@@ -50,7 +51,7 @@ function runResolver(pathname, overrides = '') {
   ctx.window = ctx; // the page's globals are window's, as in a browser
   const errors = [];
   for (const [, script] of html.matchAll(/<script>([\s\S]*?)<\/script>/g)) try { vm.runInContext(script, ctx); } catch (e) { errors.push(e.message); }
-  return { html, errors, went: ctx.went, routes: ctx.ROUTES, names: ctx.NAMES, overrides: { ...ctx.OVERRIDES }, registered: ctx.registered, here: el('here').textContent, points: !el('points').hidden,
+  return { html, errors, went: ctx.went, routes: ctx.ROUTES, names: ctx.NAMES, overrides: { ...ctx.__overrides }, registered: ctx.registered, here: el('here').textContent, points: !el('points').hidden,
     title: els.title.textContent, shown: !els.app.hidden ? `${el('why').textContent} ${el('name').textContent} ${el('open').href}` : '' };
 }
 
@@ -105,9 +106,11 @@ test('the resolver page: overrides in any case, and a link cut short or mistyped
 });
 
 test('Check a tag reads OVERRIDES as the resolver does, so it shows where a tap really goes', () => {
-  // as shipped: none
+  // as shipped: none, and both scripts run
   assert.deepEqual(readOverrides(runResolver('/nothing').html), {});
   assert.deepEqual(runResolver('/nothing').overrides, {});
+  assert.deepEqual(runResolver('/nothing').errors, []);
+  assert.equal(overridesWork(runResolver('/nothing').html), true);
   // the owner's lines, each way they might be typed: either quote, any case, a comma or none at the end, one commented out
   for (const lines of [
     "  'h/water-heater': 'https://placard.junkdrawer.works/#water-shutoff'",
@@ -116,6 +119,7 @@ test('Check a tag reads OVERRIDES as the resolver does, so it shows where a tap 
     const r = runResolver('/nothing', lines);
     assert.deepEqual(r.errors, [], lines);
     assert.equal(resolverWorks(r.html), true, lines);
+    assert.equal(overridesWork(r.html), true, lines);
     assert.deepEqual(readOverrides(r.html), r.overrides, `Check a tag and the resolver read OVERRIDES differently: ${lines}`);
     assert.ok(Object.keys(r.overrides).length, 'the resolver took none of them: ' + lines);
   }
@@ -128,21 +132,47 @@ test('Check a tag reads OVERRIDES as the resolver does, so it shows where a tap 
   assert.match(readFileSync(new URL('../404.html', import.meta.url), 'utf8'), /\nvar OVERRIDES = \{\n\};\n/, '404.html\'s OVERRIDES block changed shape: change js/overrides.js with it');
 });
 
-test('a mistake typed into OVERRIDES stops every tap, and Check a tag knows it; a pair kept in a comment reads as the tap goes', () => {
+test('a mistake typed into OVERRIDES loses only the overrides: every sticker still opens its app, and Check a tag knows', () => {
   assert.equal(resolverWorks(runResolver('/nothing').html), true, 'as shipped');
+  // OVERRIDES is a script of its own, before the resolver's
+  const html = runResolver('/nothing').html, scripts = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map(m => m[1]);
+  assert.equal(scripts.length, 3);
+  assert.match(scripts[0], /\nvar OVERRIDES = \{\n\};\n$/, 'OVERRIDES isn\'t on its own in the first script');
+  assert.match(scripts[1], /var ROUTES = /);
+  assert.doesNotMatch(scripts[1], /OVERRIDES\s*=[^=]/, 'the resolver assigns to OVERRIDES');
   for (const [what, lines] of [
     ['a comma left out between two lines', "  'h/water-heater': 'https://example.com/manual'\n  'h/smoke-co': 'https://example.com/alarm'"],
     ['curly quotes from a phone keyboard', "  \u2018h/water-heater\u2019: \u2018https://example.com/manual\u2019,"],
-    ['= for :', "  'h/water-heater' = 'https://example.com/manual',"]]) {
-    for (const path of ['/h/water-heater', '/h/smoke-co', '/t/01']) {
+    ['= for :', "  'h/water-heater' = 'https://example.com/manual',"],
+    ['an address without its quotes (it runs, then stops on a name it doesn\'t know)', "  'h/water-heater': https://example.com/manual,"]]) {
+    for (const [path, app] of [['/h/water-heater', 'https://placard.junkdrawer.works/#water-heater'], ['/h/smoke-co', 'https://placard.junkdrawer.works/#smoke-co'], ['/t/01', 'https://mothball.junkdrawer.works/#01']]) {
       const r = runResolver(path, lines);
-      assert.deepEqual([r.went, r.title, r.shown], [undefined, 'This tag isn\'t set up', ''], `${what}: a tap on ${path}`);
-      assert.equal(r.errors.length, 2, `${what}: the page's two scripts didn't both stop: ${r.errors}`);
+      assert.equal(r.went, app, `${what}: a tap on ${path}`);
+      assert.equal(r.errors.length, 1, `${what}: not just OVERRIDES's script stopped: ${r.errors}`);
+      assert.deepEqual(r.overrides, {}, `${what}: the resolver used an override`);
+      assert.equal(r.registered, 'https://tag.junkdrawer.works/sw.js', `${what}: no offline copy left behind`);
     }
+    // a link cut short still says so, with a way into its app
+    assert.equal(runResolver('/h/', lines).title, 'This link is cut short or mistyped', what);
     const { html } = runResolver('/nothing', lines);
-    assert.equal(resolverWorks(html), false, `${what}: Check a tag takes 404.html for working`);
+    assert.equal(resolverWorks(html), true, `${what}: Check a tag says no sticker opens anything`);
+    assert.equal(overridesWork(html), false, `${what}: Check a tag doesn't see the mistake in OVERRIDES`);
     assert.deepEqual(readOverrides(html), {}, `${what}: Check a tag reads an override no tap gets`);
   }
+});
+
+test('a mistake in the resolver\'s own script stops every tap, and Check a tag knows it', () => {
+  const broken = h => h.replace("  t: 'https://mothball.junkdrawer.works/',", "  t: 'https://mothball.junkdrawer.works/'");
+  for (const path of ['/h/water-heater', '/t/01']) {
+    const r = runResolver(path, '', broken);
+    assert.notEqual(r.html, runResolver(path).html);
+    assert.equal(r.went, undefined, path);
+    assert.equal(r.errors.length, 2, `the resolver's and the page's last script didn't both stop: ${r.errors}`);
+    assert.equal(resolverWorks(r.html), false, 'Check a tag takes 404.html for working');
+  }
+});
+
+test('a pair kept in a comment reads as the tap goes', () => {
   // an old pair kept in a comment after the new one: the tap goes to the new one, and Check a tag says so
   const kept = "  'h/water-heater': 'https://example.com/new', // was 'h/water-heater': 'https://example.com/old'";
   const r = runResolver('/h/water-heater', kept);
