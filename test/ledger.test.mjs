@@ -164,6 +164,10 @@ test('a tote saved as 01 by version 1.0 of the script (stored as the number 1) i
   assert.equal(JSON.parse(live[0][3]).name, 'Lights and wreaths');
   assert.deepEqual(post(g, { key, op: 'list', app: 'mothball', coll: 'totes', since: 0 }).docs.filter(d => !d._deleted).map(d => d.id), ['01', '02']);
   assert.deepEqual(phone.docs('totes').map(d => d.id).sort(), ['01', '02']);
+  // a pack written before anything lists its tab: the same
+  const packs = v10Totes(g, 'packrat.packs', [['03', 1000, false, '{"label":"4.0 Ah"}']]);
+  post(g, { key, op: 'put', app: 'packrat', coll: 'packs', id: '03', doc: { label: '4.0 Ah #3' } });
+  assert.deepEqual(packs.data.slice(1).map(r => [r[0], r[2]]), [['03', false], ['3', true]]);
   // an id that's really "1" (not a v1.0 01) gets its own row, and leaves 01 alone
   post(g, { key, op: 'put', app: 'mothball', coll: 'totes', id: '1', doc: { name: 'One' } });
   assert.equal(post(g, { key, op: 'get', app: 'mothball', coll: 'totes', id: '01' }).doc.name, 'Lights and wreaths');
@@ -930,7 +934,40 @@ test('after an earlier version of the sheet is restored, Ledger, Send everything
   g.sendAgain();
   assert.deepEqual(s.data.at(-1), ['', '', '', '']);
   // what the About tab says about it
-  assert.equal(sheets.About.data[3][1], 'Change a json cell and the apps pick it up at their next sync; keep it valid JSON. To remove a record, put TRUE in its deleted cell. After restoring an earlier version, use Ledger › Send everything to the phones again.');
+  assert.equal(sheets.About.data[3][1], 'Change a json cell and the apps pick it up at their next sync; keep it valid JSON. To remove a record, put TRUE in its deleted cell; to bring one back, FALSE. After restoring an earlier version, use Ledger › Send everything to the phones again.');
+});
+
+test('a deleted record keeps its json, every reader leaves it out, and FALSE in its deleted cell brings it back', async () => {
+  const { g, props, sheets, open } = await world();
+  const key = props.KEY;
+  const phone = open('placard');
+  phone.put('site', { id: 'well-pump', name: 'Well pump', where: 'Basement, north wall' }); phone.put('site', { id: 'house', title: 'House manual' });
+  await phone.flush();
+  phone.del('site', 'well-pump'); phone.del('site', 'never-made'); await phone.flush();
+  const s = sheets['placard.site'], row = s.data.find(r => r[0] === 'well-pump');
+  assert.equal(row[2], true);
+  assert.deepEqual(JSON.parse(row[3] || '{}'), { name: 'Well pump', where: 'Basement, north wall' }, 'the delete threw the record away');
+  assert.equal(s.data.find(r => r[0] === 'never-made')[3], '', 'a delete of a record the sheet never had made one up');
+  // deleted again: still kept
+  post(g, { key, op: 'del', app: 'placard', coll: 'site', id: 'well-pump' });
+  assert.equal(JSON.parse(s.data.find(r => r[0] === 'well-pump')[3]).name, 'Well pump');
+  // what every reader sees: deleted, so out (the phones, the tenants' pages, a list with match as Home Assistant asks)
+  const listed = post(g, { key, op: 'list', app: 'placard', coll: 'site', since: 0 }).docs.find(d => d.id === 'well-pump');
+  assert.equal(listed._deleted, true);
+  assert.deepEqual(get(g, { op: 'pub', app: 'placard', coll: 'site' }).docs.map(d => d.id), ['house']);
+  await phone.sync(['site']);
+  assert.equal(phone.doc('site', 'well-pump'), null);
+  assert.deepEqual(phone.docs('site').map(d => d.id), ['house']);
+  post(g, { key, op: 'put', app: 'larder', coll: 'queue', id: 'q1', doc: { item: 'rice', text: 'Rice', synced: false } });
+  post(g, { key, op: 'del', app: 'larder', coll: 'queue', id: 'q1' });
+  const pull = post(g, { key, op: 'list', app: 'larder', coll: 'queue', since: 0, match: { synced: false } }).docs;
+  assert.deepEqual(pull.map(d => [d.id, d._deleted, d.text]), [['q1', true, 'Rice']], 'a deleted entry must come with _deleted, which Home Assistant skips');
+  // FALSE typed into its deleted cell: onEdit stamps it, and the page is back on the phone and the tenants' pages
+  s.data.find(r => r[0] === 'well-pump')[2] = false;
+  g.onEdit({ range: s.getRange(s.data.findIndex(r => r[0] === 'well-pump') + 1, 3) });
+  await phone.sync(['site']);
+  assert.equal(phone.doc('site', 'well-pump')?.where, 'Basement, north wall', 'FALSE in the deleted cell didn\'t bring the page back');
+  assert.deepEqual(get(g, { op: 'pub', app: 'placard', coll: 'site' }).docs.map(d => d.id).sort(), ['house', 'well-pump']);
 });
 
 test('an add sent twice with the same id (a retry) keeps one row and does not undo later changes', { todo: 'add with an id overwrites; Pinch and Cellmate send no id' }, async () => {

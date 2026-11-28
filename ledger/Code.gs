@@ -29,7 +29,7 @@ function setup() {
     ['Switchboard ledger', 'v' + VERSION],
     ['Key', key],
     ['Reports go to', Session.getEffectiveUser().getEmail()],
-    ['Tabs', 'Change a json cell and the apps pick it up at their next sync; keep it valid JSON. To remove a record, put TRUE in its deleted cell. After restoring an earlier version, use Ledger › Send everything to the phones again.'],
+    ['Tabs', 'Change a json cell and the apps pick it up at their next sync; keep it valid JSON. To remove a record, put TRUE in its deleted cell; to bring one back, FALSE. After restoring an earlier version, use Ledger › Send everything to the phones again.'],
     ['Set up', new Date()],
   ]);
   about.getRange('B4').setWrap(true);
@@ -178,7 +178,8 @@ function mend(s) {
   });
 }
 
-// One write: put (replace the record), del (mark it deleted) or add (a new record, id made up if missing).
+// One write: put (replace the record), del (mark it deleted, keeping the record, so FALSE typed into its deleted cell
+// brings it back) or add (a new record, id made up if missing).
 function write(o) {
   const name = checkName(String(o.app) + '.' + String(o.coll));
   let id = o.id != null ? String(o.id) : (o.doc && o.doc.id ? String(o.doc.id) : '');
@@ -194,20 +195,23 @@ function write(o) {
     if (json.length > 45000) throw new Error('record too big');
   }
   const cells = s.getLastRow() > 1 ? s.getRange(2, 1, s.getLastRow() - 1, 1).getValues().map(function (r) { return r[0]; }) : [];
-  const ids = cells.map(String);
-  const row = [id, now, o.op === 'del', o.op === 'del' ? '' : json];
-  let found = false;
-  const over = function (i) { found = true; asText(s, i + 2); s.getRange(i + 2, 1, 1, 4).setValues([row]); };
-  ids.forEach(function (x, i) { if (x === id) over(i); }); // every row with this id, should a tab have two
-  // Version 1.0 of this script didn't keep ids as text, so a sheet it wrote holds the tote number 01 as the number 1,
-  // which lists as "1". With no row for the exact id, a row holding that number is this record: it's written back as
-  // text, and the "1" phones listed from it is marked deleted, so they keep one record.
-  if (!found && /^\d+$/.test(id)) {
-    const n = Number(id), old = String(n);
-    cells.forEach(function (x, i) { if (typeof x === 'number' && x === n) over(i); });
-    if (found && old !== id && cells.indexOf(old) < 0) { asText(s, s.getLastRow() + 1); s.appendRow([old, now, true, '']); }
+  // the rows holding this record: every row with its id, should a tab have two. Version 1.0 of this script didn't keep
+  // ids as text, so a sheet it wrote can hold the tote number 01 as the number 1 (see mend()): with no row for the exact
+  // id, a row holding that number is this record. It's written back as text, and the "1" phones listed from it is
+  // marked deleted, so they keep one record.
+  let at = [], old = '';
+  cells.forEach(function (x, i) { if (String(x) === id) at.push(i); });
+  if (!at.length && /^\d+$/.test(id)) {
+    cells.forEach(function (x, i) { if (typeof x === 'number' && x === Number(id)) at.push(i); });
+    if (at.length && String(Number(id)) !== id && cells.indexOf(String(Number(id))) < 0) old = String(Number(id));
   }
-  if (!found) { asText(s, s.getLastRow() + 1); s.appendRow(row); }
+  // the record as the sheet has it now: the row changed last
+  const cur = at.length && o.op === 'del' ? newest(at.map(function (i) { return s.getRange(i + 2, 1, 1, 4).getValues()[0]; }))[0] : null;
+  if (o.op === 'del') json = cur && cur[3] !== '' ? String(cur[3]) : '';
+  const row = [id, now, o.op === 'del', json];
+  at.forEach(function (i) { asText(s, i + 2); s.getRange(i + 2, 1, 1, 4).setValues([row]); });
+  if (old) { asText(s, s.getLastRow() + 1); s.appendRow([old, now, true, '']); }
+  if (!at.length) { asText(s, s.getLastRow() + 1); s.appendRow(row); }
   return { ok: true, id: id, updated: now };
 }
 
