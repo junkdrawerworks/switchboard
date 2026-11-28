@@ -564,7 +564,8 @@ async function privacyChecks({ browser, base, assert }) {
       const text = await p.locator('main').innerText();
       for (const said of [/no accounts, no analytics and no cookies/, /Google Sheet in your own Google account/, /can read every page of the manual, with no key/,
         /door codes and passwords stay off it/, /their name and phone or email if they give them/, /emailed, from the owner's Google account, to the address in the sheet's About tab/,
-        /Reply goes to the tenant's email/, /treat them like a password/])
+        /Reply goes to the tenant's email/, /treat them like a password/, /\(not when its stickers were written or locked\)/,
+        /Reading it and sending a report go from the tenant's phone to the owner's Google script, so Google sees those requests/])
         assert.match(text, said, `${at}: the privacy page doesn't say ${said}`);
       assert.equal(await p.locator('.crumb a').getAttribute('href'), './');
       const bg = await p.evaluate(() => [getComputedStyle(document.body).backgroundColor, getComputedStyle(document.body).color]);
