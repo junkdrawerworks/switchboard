@@ -63,7 +63,7 @@ function handle(q) {
     if (op === 'ping' && !q.key) return { ok: true, app: 'switchboard-ledger', version: VERSION };
     if (op === 'pub') {
       if (PUBLIC_READ.indexOf(name) < 0) return { ok: false, error: 'not public' };
-      return { ok: true, docs: list(name, 0, null).filter(function (d) { return !d._deleted; }) };
+      return { ok: true, docs: list(name, 0, null).filter(function (d) { return !d._deleted; }).map(shown) };
     }
     if (op === 'report') return report(name, q.doc);
     const key = PropertiesService.getScriptProperties().getProperty('KEY');
@@ -85,6 +85,9 @@ function handle(q) {
   }
 }
 
+// A page as anyone may read it: not when its sticker was written or locked, nor when it last changed (the owner's list
+// has those; the tenants' pages use none of them).
+function shown(d) { const o = Object.assign({}, d); delete o.tagged; delete o.locked; delete o._updated; return o; }
 function checkName(name) {
   if (!TAB.test(name)) throw new Error('bad app or coll');
   return name;

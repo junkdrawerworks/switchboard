@@ -257,6 +257,17 @@ test('only Placard\'s site is public, and public reports are kept, limited and e
   assert.equal(reps.length, 30);
 });
 
+test('the tenants\' pages (pub) leave out when each sticker was written or locked, and when a page last changed', () => {
+  const { g, props } = fakeGoogle();
+  g.setup();
+  post(g, { key: props.KEY, op: 'put', app: 'placard', coll: 'site', id: 'water-heater', doc: { name: 'Water heater', where: 'Basement', tagged: '2026-11-20', locked: '2026-11-21', order: 2 } });
+  const [page] = get(g, { op: 'pub', app: 'placard', coll: 'site' }).docs;
+  assert.deepEqual(page, { id: 'water-heater', name: 'Water heater', where: 'Basement', order: 2 });
+  // the owner's own list keeps them
+  const own = post(g, { key: props.KEY, op: 'list', app: 'placard', coll: 'site', since: 0 }).docs[0];
+  assert.deepEqual([own.tagged, own.locked, own._updated > 0], ['2026-11-20', '2026-11-21', true]);
+});
+
 test('only a real report counts towards the hour', () => {
   const { g, props } = fakeGoogle();
   g.setup();
