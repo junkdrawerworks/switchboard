@@ -44,16 +44,25 @@ export async function lockTag({ check = null, timeout = 30000 } = {}) {
     scan = got.scan;
     const why = check(got.sticker);
     if (why) throw wrongTag(why);
+    // from here, any other sticker that comes near may be the one locked: one read with another link or serial, or one
+    // Chrome couldn't read (it can still lock that)
     let other = false;
     r.onreading = ev => { if (!sameSticker({ serial: ev.serialNumber || '', url: urlOf(ev) }, got.sticker)) other = true; };
-    const lock = r.makeReadOnly({ signal: ctl.signal });
-    const gone = new Promise(resolve => { timer = setTimeout(() => { late = true; ctl.abort(); resolve(); }, LOCK_WITHIN); });
+    r.onreadingerror = () => { other = true; };
+    // the lock has a signal of its own: called off at LOCK_WITHIN, the scan goes on listening while the call-off reaches
+    // the reader, so a sticker locked in that moment is still read here. Stop or a newer job calls off both.
+    const off = new AbortController();
+    if (ctl.signal.aborted) off.abort(); else ctl.signal.addEventListener('abort', () => off.abort());
+    const lock = r.makeReadOnly({ signal: off.signal });
+    const gone = new Promise(resolve => { timer = setTimeout(() => { late = true; off.abort(); resolve(); }, LOCK_WITHIN); });
     try { await Promise.race([lock, gone]); } catch (e) { if (!late) throw e; }
-    if (late) { lock.catch(() => {}); throw wrongTag('The sticker moved before it was locked. Hold it still against the phone and press Lock sticker again. Nothing was locked.'); }
-    // the reading and the lock's answer come back to the page on separate channels: a moment for a reading sent first
     clearTimeout(timer);
+    if (late) lock.catch(() => {});
+    // the reading and the lock's answer come back to the page on separate channels, and a call-off takes a moment to
+    // reach the reader: a moment for a reading sent first, either way
     await new Promise(resolve => setTimeout(resolve, 150));
     if (other) throw wrongTag('Another sticker came near the phone and may have been locked instead. This page\'s sticker isn\'t marked locked: tap both to check.');
+    if (late) throw wrongTag('The sticker moved before it was locked. Hold it still against the phone and press Lock sticker again. Nothing was locked.');
   } finally { clearTimeout(timer); scan?.abort(); if (active === ctl) active = null; }
 }
 

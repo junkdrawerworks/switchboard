@@ -6,8 +6,9 @@ import assert from 'node:assert/strict';
 // makeReadOnly() locks the sticker against the phone (locked: whether anything was listening then, as Chrome stays on a
 // sticker it has just read while a scan is on). With away set, the sticker read has left the phone by the time the lock
 // is asked for: as in Chrome, the lock waits for the next sticker to come near (tap), which the scan reads first and
-// the lock then locks, unchecked, until its signal calls it off.
-let readers = [], locked = [], away = false, waiting = null;
+// the lock then locks, unchecked, until its signal calls it off. With hop set, a lock called off is refused to the page at
+// once, as Blink does, but the reader hears of it only hop ms later and locks a sticker that comes near meanwhile.
+let readers = [], locked = [], away = false, waiting = null, hop = 0;
 globalThis.window = globalThis;
 globalThis.NDEFReader = class {
   async scan({ signal } = {}) {
@@ -19,24 +20,30 @@ globalThis.NDEFReader = class {
     if (signal?.aborted) throw Object.assign(new Error('aborted'), { name: 'AbortError' });
     if (!away) { locked.push({ listening: !!this.listening }); return; }
     return new Promise((resolve, reject) => {
-      waiting = serial => { waiting = null; locked.push({ listening: !!this.listening, serial }); resolve(); };
-      signal?.addEventListener('abort', () => { if (!waiting) return; waiting = null; reject(Object.assign(new Error('aborted'), { name: 'AbortError' })); });
+      const w = serial => { waiting = null; locked.push({ listening: !!this.listening, serial }); resolve(); };
+      waiting = w;
+      signal?.addEventListener('abort', () => {
+        if (waiting !== w) return;
+        reject(Object.assign(new Error('aborted'), { name: 'AbortError' }));
+        if (hop) setTimeout(() => { if (waiting === w) waiting = null; }, hop); else waiting = null;
+      });
     });
   }
 };
 const enc = s => new TextEncoder().encode(s);
-// lockFirst: the lock's answer reaches the page before the reading does (they come back on separate channels)
-const tap = (records, serial = '04:a2:19:7c', { lockFirst = false } = {}) => {
+// lockFirst: the lock's answer reaches the page before the reading does (they come back on separate channels).
+// unreadable: Chrome can't read what the sticker holds (a readingerror), though it can still lock it.
+const tap = (records, serial = '04:a2:19:7c', { lockFirst = false, unreadable = false } = {}) => {
   const r = readers.filter(x => x.listening).at(-1);
   assert.ok(r || waiting, 'nothing is listening');
-  const read = () => r?.onreading?.({ serialNumber: serial, message: { records } });
+  const read = () => unreadable ? r?.onreadingerror?.(new Event('readingerror')) : r?.onreading?.({ serialNumber: serial, message: { records } });
   if (lockFirst) { waiting?.(serial); setTimeout(read, 5); return; }
   read();
   waiting?.(serial);
 };
 const tick = () => new Promise(r => setTimeout(r, 0));
-const { readOnce, lockTag, refusedWrite, cancelNfc, explainNfc, sameSticker } = await import('../js/kit/nfc.js');
-beforeEach(() => { cancelNfc(); readers = []; locked = []; away = false; waiting = null; });
+const { readOnce, lockTag, refusedWrite, cancelNfc, explainNfc, sameSticker, LOCK_WITHIN } = await import('../js/kit/nfc.js');
+beforeEach(() => { cancelNfc(); readers = []; locked = []; away = false; waiting = null; hop = 0; });
 
 test('a sticker held to the phone is read, and the reader stops listening', async () => {
   const p = readOnce({ timeout: 2000 });
@@ -125,6 +132,34 @@ test('another sticker that comes near before the lock lands may be locked instea
   tap([{ recordType: 'url', data: enc('https://tag.junkdrawer.works/t/05') }], '04:cc', { lockFirst: true });
   await assert.rejects(within(q), { name: 'WrongTagError', message: /^Another sticker came near the phone/ });
   assert.deepEqual(locked.map(l => l.serial), ['04:bb', '04:cc']);
+});
+
+test('a sticker Chrome can\'t read that comes near before the lock lands may be locked instead: said too', { timeout: 6000 }, async () => {
+  away = true;
+  const p = lockTag({ check: mineOnly, timeout: 4000 });
+  await tick(); tap(MINE, '04:aa');
+  await new Promise(r => setTimeout(r, 400));
+  tap([], '04:dd', { unreadable: true });   // the next sticker in the pile, its records unreadable
+  await assert.rejects(within(p), { name: 'WrongTagError', message: 'Another sticker came near the phone and may have been locked instead. This page\'s sticker isn\'t marked locked: tap both to check.' });
+  assert.deepEqual(locked.map(l => l.serial), ['04:dd']);
+  assert.ok(readers.every(r => !r.listening), 'still scanning');
+});
+
+test('a sticker locked in the moment the call-off at 1.5 s takes to reach the reader is said, not "Nothing was locked"', { timeout: 6000 }, async () => {
+  away = true; hop = 100;
+  const p = lockTag({ check: mineOnly, timeout: 4000 });
+  await tick(); tap(MINE, '04:aa');
+  // 30 ms after the lock is called off, still on its way to the reader, the next sticker in the pile comes near
+  setTimeout(() => tap([{ recordType: 'url', data: enc('https://tag.junkdrawer.works/t/05') }], '04:bb'), LOCK_WITHIN + 30);
+  await assert.rejects(within(p), { name: 'WrongTagError', message: /^Another sticker came near the phone and may have been locked instead\./ });
+  assert.deepEqual(locked.map(l => l.serial), ['04:bb']);
+  assert.ok(readers.every(r => !r.listening), 'still scanning');
+  // nothing near in that moment: nothing was locked, as before
+  const q = lockTag({ check: mineOnly, timeout: 4000 });
+  await tick(); tap(MINE, '04:aa');
+  await assert.rejects(within(q), { name: 'WrongTagError', message: /Nothing was locked\.$/ });
+  await new Promise(r => setTimeout(r, hop + 20));
+  assert.deepEqual(locked.map(l => l.serial), ['04:bb']);
 });
 
 test('the same sticker back against the phone before the lock lands is locked, as asked', { timeout: 6000 }, async () => {
