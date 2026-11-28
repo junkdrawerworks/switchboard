@@ -337,6 +337,54 @@ async function anotherDevice({ page, base, assert }) {
   } finally { await other.close(); }
 }
 
+// A connect link for another ledger on a phone whose Switchboard already has one (anyone can make such a link, and
+// Switchboard hands its ledger to every app): asked first, with the address tidied meanwhile, and Cancel keeps the one
+// saved. The same ledger is taken at once, as is any link on a phone with none (Another device, above). Pasted into the
+// page already open it's asked too, and Use it starts the page again on the new one.
+async function connectAsks({ page, base, assert }) {
+  const A = 'https://script.google.com/macros/s/AKfyTEST/exec', B = 'https://script.google.com/macros/s/AKfyOTHERxyz123/exec', K = 'k'.repeat(40), K2 = 'q'.repeat(40);
+  const link = (u, k) => '#connect=' + Buffer.from(JSON.stringify({ u, k })).toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  const other = await page.context().browser().newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true });
+  try {
+    await other.route('https://script.google.com/**', r => r.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true, version: '1.1', time: 1 }) }));
+    await other.addInitScript(([u, k]) => { if (!localStorage.getItem('switchboard.ledger')) localStorage.setItem('switchboard.ledger', JSON.stringify({ url: u, key: k })); }, [A, K]);
+    const p = await other.newPage();
+    const saved = () => p.evaluate(() => JSON.parse(localStorage.getItem('switchboard.ledger')));
+    const ask = p.getByRole('dialog', { name: 'Use this ledger instead?' });
+    await p.goto(base + link(B, K2));
+    await ask.waitFor();
+    assert.equal(await ask.locator('form > p').textContent(), 'This link sets Switchboard to a different ledger (…xyz123). The one saved here (…fyTEST) is forgotten on this device, and each app follows the new one when you press Connect.');
+    assert.deepEqual(await ask.locator('button[type=submit]').evaluate(b => [b.textContent, b.className]), ['Use it', 'btn danger']);
+    assert.equal(new URL(p.url()).hash, '', 'the key was left in the address while asking');
+    await ask.locator('button', { hasText: 'Cancel' }).click();
+    await p.waitForTimeout(400);
+    assert.deepEqual(await saved(), { url: A, key: K }, 'Cancel didn\'t keep the ledger saved here');
+    assert.deepEqual([await p.inputValue('#lurl'), await p.inputValue('#lkey')], [A, K]);
+    assert.equal(new URL(p.url()).hash, '');
+    // the same ledger: taken at once, as before
+    await p.evaluate(h => { location.hash = h; }, link(A, K));
+    await p.waitForFunction(() => document.querySelector('#toast')?.textContent === 'Connected to your ledger.');
+    assert.equal(await p.locator('dialog[open]').count(), 0, 'asked about the ledger already saved');
+    assert.equal(new URL(p.url()).hash, '');
+    // another one pasted into the page already open: asked, and Use it starts the page again on it
+    await p.evaluate(h => { location.hash = h; }, link(B, K2));
+    await ask.waitFor();
+    await ask.locator('button[type=submit]').click();
+    await p.waitForFunction(u => JSON.parse(localStorage.getItem('switchboard.ledger') || '{}').url === u, B);
+    await p.waitForFunction(u => document.querySelector('#lurl')?.value === u, B);
+    assert.deepEqual(await saved(), { url: B, key: K2 });
+    assert.equal(await p.inputValue('#lkey'), K2);
+    assert.equal(new URL(p.url()).hash, '', 'the key was left in the address');
+    // a new key for the ledger saved here: asked, in words for that
+    await p.evaluate(h => { location.hash = h; }, link(B, K));
+    await ask.waitFor();
+    assert.equal(await ask.locator('form > p').textContent(), 'This link has another key for the ledger saved here (…xyz123). Use it only if you ran setup again: with the wrong key, nothing saves.');
+    await ask.locator('button', { hasText: 'Cancel' }).click();
+    await p.waitForTimeout(400);
+    assert.deepEqual(await saved(), { url: B, key: K2 });
+  } finally { await other.close(); }
+}
+
 // Installed on Android, an app opens every address inside its scope in its own window. Switchboard's scope is its page
 // alone, so a sticker's address (/h/water-heater, on the same origin) opens the resolver in the browser as on any other
 // phone. Chrome reads the manifest without errors (a scope that doesn't hold start_url is ignored, with an error), it can
@@ -413,6 +461,7 @@ export async function appChecks({ page, ctx, base, assert, problems }) {
   assert.equal(await page.locator('#way-back').textContent(), 'Undo a mistake: something deleted in an app comes back with FALSE in its row\'s deleted cell (column C, in that app\'s tab of the sheet). '
     + 'For a change, restore the version from before (File, Version history), then use the sheet\'s Ledger menu, Send everything to the phones again. The steps are in the build guide\'s Reference.');
   await anotherDevice({ page, base, assert });
+  await connectAsks({ page, base, assert });
   // the first zip's script (1.0) answers too, but turns tote 01 into 1: amber, and how to paste the new one
   version = '1.0';
   await page.click('#ledger-test');

@@ -1,12 +1,32 @@
 import { $, h, mount, toast, buzz, confirmSheet, qrSvg, loadQr } from './kit/ui.js';
 import { APPS, parseTag, resolve, tagUrl } from './kit/tags.js';
-import { Ledger, connectLink, watchConnectLinks } from './kit/ledger.js';
+import { Ledger, connectLink, watchConnectLinks, readConnectLink } from './kit/ledger.js';
 import { readOnce, explainNfc, nfcSupported, cancelNfc } from './kit/nfc.js';
 import { nfcPanel } from './kit/panel.js';
 import { readOverrides, overridesWork, resolverWorks } from './overrides.js';
 
 // Switchboard's own connect link (Another device, scanned on a second phone or tablet) sets up its ledger here as each
-// app's does there: taken before the ledger is made, and the key isn't left in the address.
+// app's does there: taken before the ledger is made, and the key isn't left in the address. Switchboard is where every
+// app's Connect comes from, so a link for another ledger than the one saved here (anyone can make one) asks first, and
+// Cancel keeps the saved one; with none saved, or the same one, it's taken at once, as before. Yes puts the link back
+// in the address for the kit to take, which reloads the page on the new ledger.
+let allowed = '';
+const idOf = u => u.replace(/\/(exec|dev)\/?$/, '').slice(-6);   // the end of the deployment's id, before /exec
+function askFirst() {
+  const c = readConnectLink(location.hash), hash = location.hash;
+  if (!c) return;                                 // no link, or one that doesn't read (the kit says so)
+  if (hash === allowed) { allowed = ''; return; }
+  let old = null;
+  try { old = JSON.parse(localStorage.getItem('switchboard.ledger') || 'null'); } catch {}
+  if (!old?.url || !old.key || (old.url === c.url && old.key === c.key)) return;
+  history.replaceState(null, '', location.pathname + location.search);
+  const text = old.url === c.url
+    ? `This link has another key for the ledger saved here (…${idOf(c.url)}). Use it only if you ran setup again: with the wrong key, nothing saves.`
+    : `This link sets Switchboard to a different ledger (…${idOf(c.url)}). The one saved here (…${idOf(old.url)}) is forgotten on this device, and each app follows the new one when you press Connect.`;
+  confirmSheet('Use this ledger instead?', text, 'Use it', { danger: true }).then(yes => { if (yes) { allowed = hash; location.hash = hash; } });
+}
+addEventListener('hashchange', askFirst);         // before the kit's own, so it sees the address first
+askFirst();
 watchConnectLinks('switchboard', toast);
 const ledger = new Ledger('switchboard');
 const appOrder = ['h', 't', 'p', 'f', 'm'];

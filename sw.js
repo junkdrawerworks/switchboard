@@ -8,7 +8,7 @@
 // fingerprint of every file in SHELL: change any of them and test/e2e.mjs fails until FILES is changed to match (it
 // says what to), which changes this file, so every copy is made whole again at once.
 const CACHE = 'switchboard-v3'; // bump the number when the file list changes
-const FILES = '0c64f4fb'; // test/e2e.mjs checks this
+const FILES = 'fd9eab24'; // test/e2e.mjs checks this
 const SHELL = [
   './', 'index.html', 'icon.svg', 'manifest.webmanifest',
   '404.html', 'css/app.css', 'css/kit.css', 'js/app.js',
