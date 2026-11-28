@@ -168,6 +168,36 @@ test('a check may wait (a question in a sheet of its own), and a line alone or a
   assert.equal(second, null);
 });
 
+test('a check that fails says so and keeps the sheet open with what was typed, so Save never just does nothing', async () => {
+  const p = fakePage();
+  const { sheet } = await import('../js/kit/ui.js');
+  const warned = [], warn = console.warn;
+  console.warn = e => warned.push(e);
+  try {
+    let fail = 'throws';
+    const done = sheet({ title: 'Edit Coffee beans', fields: [{ name: 'name', label: 'Name', value: 'Coffee beans' }, { name: 'note', label: 'Note' }],
+      check: () => {
+        if (fail === 'throws') throw new TypeError("Cannot read properties of undefined (reading 'netG')");
+        return fail === 'rejects' ? Promise.reject(new Error('no answer')) : '';
+      } });
+    let result = 'open';
+    done.then(v => { result = v; });
+    p.field('note').value = 'The big tin';
+    const line = () => p.dialog().find(n => /sheet-msg/.test(n.className)).textContent;
+    for (const how of ['throws', 'rejects']) {
+      fail = how;
+      p.submit(); await later();
+      assert.equal(result, 'open', `a check that ${how} closed the sheet`);
+      assert.equal(line(), 'Not saved: something went wrong. Try again.', `a check that ${how} said nothing`);
+      assert.equal(p.field('note').value, 'The big tin');
+    }
+    assert.equal(warned.length, 2, 'what went wrong is not in the console');
+    fail = '';
+    p.submit(); await later();                                         // and the next press is a Save again
+    assert.deepEqual(result, { name: 'Coffee beans', note: 'The big tin' });
+  } finally { console.warn = warn; }
+});
+
 test('a sheet is named by its title, which takes the focus on a touch screen so the keyboard waits for a tap on a field', async () => {
   const { sheet } = await import('../js/kit/ui.js');
   const fields = [{ name: 'name', label: 'Name' }, { name: 'note', label: 'Note' }];

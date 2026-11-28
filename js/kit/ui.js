@@ -39,10 +39,12 @@ export function toast(text, kind = '') {
 // its own). A line it returns (or { line, field }) is said above the buttons, and the sheet stays open with everything
 // typed, the focus on that field; { field } alone keeps it open with no line. Nothing, and it closes as before. So a
 // Save the app refuses (a number already taken, a weight it can't read, the ledger not heard from yet) loses nothing.
+// A check that fails (throws) says CHECK_FAILED and keeps the sheet open the same way, rather than doing nothing.
 // On a touch screen the title takes the focus when it opens, so the on-screen keyboard waits for a tap on a field
 // instead of covering half the sheet at once; autofocus: true (where typing is the whole job) gives the first field
 // the focus anyway. With a mouse and keyboard the first field has it. The title names the sheet for a screen reader.
 let sheets = 0;
+export const CHECK_FAILED = 'Not saved: something went wrong. Try again.';
 // okDanger: the submit button is the red one (a confirm that deletes, locks or clears for good).
 export function sheet({ title, fields = [], body = null, ok = 'Save', danger = null, other = null, check = null, autofocus = false, okDanger = false }) {
   return new Promise(resolve => {
@@ -80,7 +82,9 @@ export function sheet({ title, fields = [], body = null, ok = 'Save', danger = n
       if (check) {
         checking = true;
         let r;
-        try { r = await check(out); } finally { checking = false; }
+        try { r = await check(out); }
+        catch (err) { console.warn(err); r = CHECK_FAILED; }   // a bug in a check: said, not a Save that does nothing
+        finally { checking = false; }
         if (!dlg.open) return;                       // cancelled while it was checking
         const { line = '', field = null } = typeof r === 'string' ? { line: r } : r || {};
         said.textContent = line;
