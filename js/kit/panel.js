@@ -19,7 +19,8 @@ const panels = new Map();
 // tagged and locked are the days (YYYY-MM-DD) the app saved when this sticker was written and locked. In the sample
 // (sample: true) Write still writes a real sticker, which is handy for trying the phone's reader, but Lock is off: it
 // can't be undone, and the sample's pages aren't the real ones. move: what the locked line says after its date, how to
-// send a locked sticker somewhere else (Switchboard's OVERRIDES unless the app has its own way). name: what this
+// send a locked sticker somewhere else (Switchboard's OVERRIDES unless the app has its own way), which Lock's question
+// ends with too. name: what this
 // sticker is for, and nameOf({ letter, id }): the app's name for another of its stickers, or nothing, both for what
 // the panel says when the sticker held to the phone isn't this one ("This sticker opens Water heater, not Furnace").
 // A new sticker written for a locked page is a replacement or a spare, and the panel asks which once it's written
@@ -82,7 +83,7 @@ export function nfcPanel(url, { label = 'Write sticker', lock = false, onWritten
     : got.blank ? 'This sticker is blank. Write it first, then lock it.' : `This sticker doesn't hold the link for ${name}. Nothing was locked.`;
   if (lock) btns.append(h('button', { type: 'button', class: 'btn ghost', 'data-what': 'lock', 'data-label': 'Lock sticker', disabled: sample, onclick: async () => {
     if (sample) return;
-    if (!st.busy && !await confirmSheet('Lock this sticker?', 'Locking is permanent: nobody can rewrite it, you included. Do it only after a tap opens the right page. The link can still be pointed elsewhere from Switchboard.', 'Lock it', { danger: true })) return;
+    if (!st.busy && !await confirmSheet('Lock this sticker?', `Locking is permanent: nobody can rewrite it, you included. Do it only after a tap opens the right page. ${move}`, 'Lock it', { danger: true })) return;
     if (await run('lock', () => lockTag({ check: refuse }).then(() => 'locked')) !== 'locked') return;
     // the page was locked already: this is another sticker for it, a spare (a replacement was saved as written first)
     buzz(80); say('Locked. It will open this page for good.', 'ok'); st.spare = false;
