@@ -252,6 +252,25 @@ test('a 1.0 tote or pack row stored as the number 1 lists as 01, so no device of
   assert.ok(packs.data.length >= 2);
 });
 
+test('a phone that only listed "1" under 1.0 gets 01 on its next ordinary sync once another device lists the tab', async t => {
+  const { g, props, open } = await world();
+  const key = props.KEY;
+  v10Totes(g, 'mothball.totes', [[1, 1000, false, '{"name":"Lights"}'], [12, 1000, false, '{"name":"Garlands"}']]);
+  t.mock.timers.enable({ apis: ['Date'], now: Date.now() });
+  const phone = open('mothball');
+  // the phone's list came from 1.0, before the paste: tote 01 as "1"
+  const v10list = { ok: true, time: Date.now(), docs: [{ id: '1', name: 'Lights', _updated: 1000 }, { id: '12', name: 'Garlands', _updated: 1000 }] };
+  phone.call = async b => (b.op === 'list' && b.coll === 'totes' ? structuredClone(v10list) : post(g, { ...b, key }));
+  await phone.sync(['totes']);
+  delete phone.call;
+  // 1.1 pasted; the laptop lists the tab, which mends the row, then the phone's next sync is an ordinary one (since)
+  t.mock.timers.tick(60e3);
+  post(g, { key, op: 'list', app: 'mothball', coll: 'totes', since: 0 });
+  t.mock.timers.tick(60e3);
+  await phone.sync(['totes']);
+  assert.deepEqual(phone.docs('totes').map(d => d.id).sort(), ['01', '12'], 'no tote 01 until the whole list a day later: its sticker page offers Set up tote 01');
+});
+
 test('Switchboard asks for the same script version as ledger/Code.gs is', () => {
   const version = /const VERSION = '([\d.]+)'/.exec(readFileSync(new URL('../ledger/Code.gs', import.meta.url), 'utf8'))?.[1];
   const want = /const WANT = '([\d.]+)'/.exec(readFileSync(new URL('../js/app.js', import.meta.url), 'utf8'))?.[1];
@@ -422,6 +441,22 @@ test('a repeat of a report that was only kept, never emailed, says so, so the pa
   const kept = post(g, { key: props.KEY, op: 'list', app: 'placard', coll: 'reports', since: 0 }).docs;
   assert.deepEqual(kept.filter(r => !r.repeat).map(r => [r.text, r.emailed]),
     [['No hot water', false], ['The tank drips', false], ['Breaker 21 tripped', false], ['The pan is wet', true], ['Odd smell', undefined]], 'what each kept report says about its email');
+});
+
+test('a repeat report doesn\'t use up one of the day\'s emails, and a handled report\'s words can be sent again', () => {
+  const { g, props } = fakeGoogle();
+  g.setup();
+  const RealDate = Date;
+  let t = RealDate.UTC(2026, 10, 27, 7, 19);
+  g.Date = class extends RealDate { constructor(...a) { super(...(a.length ? a : [t])); } static now() { return t; } };
+  const send = text => post(g, { op: 'report', app: 'placard', coll: 'reports', doc: { system: 'well-pump', text, kind: 'Problem' } });
+  send('No water');
+  for (let i = 0; i < 10; i++) { t += 60e3; send('No water'); }
+  assert.equal(props.MAILED.split(' ')[1], '1', 'each repeat took one of the day\'s 20 emails');
+  const rows = post(g, { key: props.KEY, op: 'list', app: 'placard', coll: 'reports', since: 0 }).docs;
+  for (const r of rows) post(g, { key: props.KEY, op: 'put', app: 'placard', coll: 'reports', id: r.id, doc: { ...r, status: 'handled' } });
+  t += 60e3;
+  assert.equal(send('No water').emailed, true, 'a report handled since was counted as the first');
 });
 
 test('a report says whether the email went: at most 20 a day, never past Google\'s quota, and kept either way', () => {
