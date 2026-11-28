@@ -12,6 +12,7 @@ const PUBLIC_REPORT = { 'placard.reports': 30 };      // anyone may add to these
 // script you run: developers.google.com/apps-script/guides/services/quotas. Past this a report is still kept.
 const MAIL_PER_DAY = 20;
 const HEAD = ['id', 'updated', 'deleted', 'json'];
+const TAB = /^[a-z0-9-]{1,30}\.[a-z0-9-]{1,30}$/;    // a collection's tab: app.collection
 // Collections whose ids are numbers written with two digits (tote 01, pack 07): see mend().
 const NUMBERED = ['mothball.totes', 'packrat.packs'];
 
@@ -28,9 +29,10 @@ function setup() {
     ['Switchboard ledger', 'v' + VERSION],
     ['Key', key],
     ['Reports go to', Session.getEffectiveUser().getEmail()],
-    ['Tabs', 'Each other tab is one collection (app.collection). Change a json cell and the apps pick it up at their next sync; keep it valid JSON.'],
+    ['Tabs', 'Change a json cell and the apps pick it up at their next sync; keep it valid JSON. To remove a record, put TRUE in its deleted cell. After restoring an earlier version, use Ledger › Send everything to the phones again.'],
     ['Set up', new Date()],
   ]);
+  about.getRange('B4').setWrap(true);
   about.setColumnWidth(1, 160); about.setColumnWidth(2, 420);
   MailApp.getRemainingDailyQuota(); // asks for the mail permission now, so the first report can email you
   Logger.log('Key: ' + key);
@@ -81,7 +83,7 @@ function handle(q) {
 }
 
 function checkName(name) {
-  if (!/^[a-z0-9-]{1,30}\.[a-z0-9-]{1,30}$/.test(name)) throw new Error('bad app or coll');
+  if (!TAB.test(name)) throw new Error('bad app or coll');
   return name;
 }
 function locked(fn) {
@@ -216,7 +218,7 @@ function onEdit(e) {
   const r = e && e.range;
   if (!r) return;
   const s = r.getSheet();
-  if (!/^[a-z0-9-]{1,30}\.[a-z0-9-]{1,30}$/.test(s.getName()) || r.getColumn() > HEAD.length) return;
+  if (!TAB.test(s.getName()) || r.getColumn() > HEAD.length) return;
   const top = Math.max(2, r.getRow());
   const ids = r.getLastRow() >= top ? s.getRange(top, 1, r.getLastRow() - top + 1, 1).getValues() : [];
   let n = ids.length;
@@ -225,6 +227,28 @@ function onEdit(e) {
   const now = Date.now();
   const stamps = s.getRange(top, 2, n, 1).getValues().map(function (v, i) { return [ids[i][0] === '' ? v[0] : now]; });
   s.getRange(top, 2, n, 1).setValues(stamps);
+}
+
+// The sheet's own menu, Ledger. Each phone fetches only the rows changed since its last sync, so a version of the sheet
+// restored from File > Version history (its rows back with their old updated times) reaches no phone: Send everything
+// to the phones again stamps every row of every collection tab as changed now, so each phone fetches the restored
+// records at its next sync, before an edit there could write its newer copy back. Google runs onOpen by itself.
+function onOpen() {
+  SpreadsheetApp.getUi().createMenu('Ledger').addItem('Send everything to the phones again', 'sendAgain').addToUi();
+}
+function sendAgain() {
+  const n = locked(function () {
+    const now = Date.now();
+    let count = 0;
+    SpreadsheetApp.getActive().getSheets().forEach(function (s) {
+      const rs = s.getLastRow() - 1;
+      if (!TAB.test(s.getName()) || rs < 1) return;
+      const ids = s.getRange(2, 1, rs, 1).getValues(), was = s.getRange(2, 2, rs, 1).getValues();
+      s.getRange(2, 2, rs, 1).setValues(was.map(function (v, i) { if (ids[i][0] === '') return v; count++; return [now]; }));
+    });
+    return count;
+  });
+  SpreadsheetApp.getActive().toast(n + (n === 1 ? ' record goes' : ' records go') + ' to every phone at its next sync.', 'Ledger');
 }
 
 // A tenant's or a visitor's note from a public page: kept short, counted per hour, and emailed to you. Only a real one

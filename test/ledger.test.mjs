@@ -44,7 +44,7 @@ function fakeGoogle() {
           getValues: () => Array.from({ length: nr }, (_, i) => Array.from({ length: nc }, (_, j) => (data[r - 1 + i] || [])[c - 1 + j] ?? '')),
           getValue: () => (data[r - 1] || [])[c - 1] ?? '',
           setNumberFormat(f) { for (let i = 0; i < nr; i++) for (let j = 0; j < nc; j++) fmt[`${r + i}:${c + j}`] = f; return this; },
-          setFontWeight() { return this; },
+          setFontWeight() { return this; }, setWrap() { return this; },
           getSheet: () => s, getRow: () => r, getLastRow: () => r + nr - 1, getColumn: () => c, getLastColumn: () => c + nc - 1,
         };
       },
@@ -53,13 +53,17 @@ function fakeGoogle() {
     };
     return s;
   };
+  const ui = { menus: [] };                           // the sheet's menus (onOpen), and its toasts
   const ss = {
     getSheetByName: n => sheets[n] || null,
     insertSheet: n => (sheets[n] = makeSheet(n)),
+    getSheets: () => Object.values(sheets),
+    toast: (msg, title) => { ui.toasts = [...(ui.toasts || []), [title, msg]]; },
   };
   let uuid = 0;
   const g = {
-    SpreadsheetApp: { getActive: () => ss, flush: () => { locks.push('flush'); } },
+    SpreadsheetApp: { getActive: () => ss, flush: () => { locks.push('flush'); },
+      getUi: () => ({ createMenu: name => { const m = { name, items: [] }; return { addItem(label, fn) { m.items.push([label, fn]); return this; }, addToUi() { ui.menus.push(m); } }; } }) },
     PropertiesService: { getScriptProperties: () => ({ getProperty: k => props[k] ?? null, setProperty: (k, v) => { props[k] = v; } }) },
     LockService: { getScriptLock: () => ({ waitLock() { locks.push('lock'); }, releaseLock() { locks.push('release'); } }) },
     CacheService: { getScriptCache: () => ({ get: k => cache[k] ?? null, put: (k, v) => { cache[k] = v; } }) },
@@ -73,7 +77,7 @@ function fakeGoogle() {
   };
   vm.createContext(g);
   vm.runInContext(readFileSync(new URL('../ledger/Code.gs', import.meta.url), 'utf8'), g);
-  return { g, sheets, props, mail, cache, locks };
+  return { g, sheets, props, mail, cache, locks, ui };
 }
 
 const post = (g, body) => JSON.parse(g.doPost({ postData: { contents: JSON.stringify(body) } }).text);
@@ -331,7 +335,7 @@ const URL_ = 'https://script.google.com/macros/s/X/exec';
 async function world() {
   globalThis.localStorage = store();
   const { Ledger } = await import('../js/kit/ledger.js');
-  const { g, props, sheets, locks, mail, cache } = fakeGoogle();
+  const { g, props, sheets, locks, mail, cache, ui } = fakeGoogle();
   g.setup();
   const net = { up: true, hold: null, hang: false, calls: 0, fail: null };
   // hold(body) may return a promise: the request is applied when it resolves, then answered. hang: Google takes the
@@ -347,7 +351,7 @@ async function world() {
   };
   const open = (app = 'frostbite') => { const l = new Ledger(app, { fetchImpl }); opened.push(l); if (!l.connected) l.setConfig(URL_, props.KEY); return l; };
   const sheet = (app, coll) => Object.fromEntries(post(g, { key: props.KEY, op: 'list', app, coll, since: 0 }).docs.map(d => [d.id, d]));
-  return { g, props, sheets, locks, mail, cache, net, open, sheet, Ledger };
+  return { g, props, sheets, locks, mail, cache, ui, net, open, sheet, Ledger };
 }
 const tick = () => new Promise(r => setImmediate(r));
 
@@ -890,6 +894,43 @@ test('a json cell changed by hand reaches a phone that has already synced, and t
   assert.equal(sheets.About.data[1][1], keyCell);
   g.onEdit({ range: s.getRange(2, 6) });                         // a note in column F
   g.onEdit({});
+});
+
+test('after an earlier version of the sheet is restored, Ledger, Send everything to the phones again brings it to a synced phone', async () => {
+  const { g, props, sheets, open, ui, locks } = await world();
+  const key = props.KEY;
+  g.onOpen();
+  assert.deepEqual(ui.menus.map(m => [m.name, m.items]), [['Ledger', [['Send everything to the phones again', 'sendAgain']]]]);
+  const phone = open('frostbite');
+  phone.put('items', { id: 'stew', name: 'Beef stew', qty: 2 }); phone.put('zones', { id: 'top', name: 'Top basket' }); await phone.flush();
+  const s = sheets['frostbite.items'];
+  for (const t of [s, sheets['frostbite.zones']]) t.data[1][1] -= 3600e3;   // saved an hour ago
+  const was = structuredClone(s.data);                                      // the version from before a mistake
+  phone.put('items', { id: 'stew', name: 'Beef stew', qty: 0 }); phone.put('items', { id: 'peas', name: 'Peas' }); await phone.flush();
+  await phone.sync(['items', 'zones']);
+  // File, Version history, restore: the rows go back as they were, their updated times too
+  s.data.splice(0, s.data.length, ...structuredClone(was));
+  await phone.sync(['items', 'zones']);
+  assert.equal(phone.doc('items', 'stew').qty, 0, 'the restored row reached the phone without the menu (the test is wrong)');
+  const before = Object.fromEntries(Object.values(sheets).map(t => [t.name, t.data.map(r => r[1])]));
+  locks.length = 0;
+  g.sendAgain();
+  assert.deepEqual(locks, ['lock', 'flush', 'release'], 'it changes the rows outside the lock');
+  for (const t of Object.values(sheets)) {
+    if (t.name === 'About') { assert.deepEqual(t.data.map(r => r[1]), before.About, 'the About tab changed'); continue; }
+    assert.equal(t.data[0][1], 'updated', 'the header row changed');
+    for (const r of t.data.slice(1)) assert.ok(r[1] > Math.max(...before[t.name].slice(1)), `${t.name} ${r[0]} keeps its old time`);
+  }
+  assert.deepEqual(ui.toasts.at(-1), ['Ledger', '2 records go to every phone at its next sync.']);
+  await phone.sync(['items', 'zones']);
+  assert.equal(phone.doc('items', 'stew').qty, 2, 'the restored version never reached the phone');
+  assert.equal(phone.doc('zones', 'top').name, 'Top basket');
+  // a row someone left empty under the records stays empty
+  s.data.push(['', '', '', '']);
+  g.sendAgain();
+  assert.deepEqual(s.data.at(-1), ['', '', '', '']);
+  // what the About tab says about it
+  assert.equal(sheets.About.data[3][1], 'Change a json cell and the apps pick it up at their next sync; keep it valid JSON. To remove a record, put TRUE in its deleted cell. After restoring an earlier version, use Ledger › Send everything to the phones again.');
 });
 
 test('an add sent twice with the same id (a retry) keeps one row and does not undo later changes', { todo: 'add with an id overwrites; Pinch and Cellmate send no id' }, async () => {
