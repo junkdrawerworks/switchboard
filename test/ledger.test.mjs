@@ -67,7 +67,8 @@ function fakeGoogle() {
     PropertiesService: { getScriptProperties: () => ({ getProperty: k => props[k] ?? null, setProperty: (k, v) => { props[k] = v; } }) },
     LockService: { getScriptLock: () => ({ waitLock() { locks.push('lock'); }, releaseLock() { locks.push('release'); } }) },
     CacheService: { getScriptCache: () => ({ get: k => cache[k] ?? null, put: (k, v) => { cache[k] = v; } }) },
-    MailApp: { sendEmail: (...a) => { if (mail.refuse) throw new Error('Service invoked too many times for one day: email.'); mail.quota--; mail.push(a); },
+    MailApp: { sendEmail: (...a) => { if (mail.refuse) throw new Error('Service invoked too many times for one day: email.');
+      if (mail.noReplyTo && a[3]?.replyTo) throw new Error('Invalid argument: replyTo'); mail.quota--; mail.push(a); },
       getRemainingDailyQuota: () => mail.quota },
     Session: { getEffectiveUser: () => ({ getEmail: () => 'owner@example.com' }), getScriptTimeZone: () => mail.tz || 'America/New_York' },
     Utilities: { getUuid: () => `0000000${++uuid}-aaaa-bbbb-cccc-dddddddddddd`.slice(-36),
@@ -355,6 +356,10 @@ test('a report\'s email says when in the script\'s own time zone, links to the R
   assert.deepEqual({ ...mail[0][3] }, { replyTo: 'pat@example.com' });
   assert.deepEqual({ ...mail[1][3] }, {}, 'a phone number as Reply-To');
   assert.deepEqual({ ...mail[2][3] }, {}, 'two addresses typed by a visitor as Reply-To');
+  // an address Google won't take as the Reply-To: the email goes without one, the address still in it
+  mail.noReplyTo = true;
+  assert.equal(send({ text: 'Pump off', name: 'Pat', contact: 'pat@example.c0m' }).emailed, true, 'a Reply-To Google turned down lost the email');
+  assert.deepEqual([mail.length, { ...mail[3][3] }, mail[3][2].split('\n')[2]], [4, {}, 'From: Pat pat@example.c0m']);
   // kept in UTC for the Reports screen, which shows it in the phone's own time
   assert.equal(post(g, { key: props.KEY, op: 'list', app: 'placard', coll: 'reports', since: 0 }).docs[0].at, '2026-11-27T10:19:00.000Z');
 });

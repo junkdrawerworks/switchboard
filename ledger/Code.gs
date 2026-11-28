@@ -366,10 +366,15 @@ function report(name, doc) {
       // the time in the script's own time zone (Project Settings in the editor), a way to the Reports screen, and Reply
       // to the tenant when they left an email address
       const at = Utilities.formatDate(new Date(clean.at), Session.getScriptTimeZone(), 'EEE, MMM d, yyyy, h:mm a');
-      MailApp.sendEmail(String(to), 'House manual: ' + kind + ' — ' + (clean.systemName || 'general'),
-        [clean.text, '', 'From: ' + (clean.name || '(no name)') + ' ' + (clean.contact || ''), 'System: ' + where, 'At: ' + at,
-          'All reports: https://placard.junkdrawer.works/#/reports'].join('\n'),
-        EMAIL.test(clean.contact || '') ? { replyTo: clean.contact } : {});
+      const subject = 'House manual: ' + kind + ' — ' + (clean.systemName || 'general');
+      const body = [clean.text, '', 'From: ' + (clean.name || '(no name)') + ' ' + (clean.contact || ''), 'System: ' + where, 'At: ' + at,
+        'All reports: https://placard.junkdrawer.works/#/reports'].join('\n');
+      // Reply goes to the tenant's address; one Google won't take as a reply-to sends it again without (the address
+      // is in the email either way)
+      if (EMAIL.test(clean.contact || '')) {
+        try { MailApp.sendEmail(String(to), subject, body, { replyTo: clean.contact }); }
+        catch (e) { MailApp.sendEmail(String(to), subject, body); }
+      } else MailApp.sendEmail(String(to), subject, body);
       emailed = true;
     }
   } catch (e) { /* the report is saved even if the email fails */ }
