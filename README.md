@@ -13,7 +13,7 @@
 - **The resolver.** `404.html` answers every tag address (GitHub Pages serves it for any path it doesn't have) and forwards the phone to `https://<app>.junkdrawer.works/#<id>`. `OVERRIDES` in the same file sends single tags elsewhere.
 - **The ledger.** `ledger/Code.gs` is a Google Apps Script for a Google Sheet you own: each tab is one app's collection, each row a record. The apps, a Raspberry Pi and ESP32 boards all read and write it with one key. Only the house manual's pages are readable without the key.
 - **Connect.** Each app lives at its own address, so each needs the ledger once. Switchboard makes a link per app that carries the address and key and opens the app with them filled in.
-- **Check a tag.** Hold any sticker to the phone to see which app it belongs to and where it goes. Web NFC needs Chrome on Android.
+- **Check a tag.** Hold any sticker to the phone to see which app it belongs to and where it goes, `OVERRIDES` included. Web NFC needs Chrome on Android.
 - **Offline.** Any phone that has tapped one sticker online keeps a copy of the resolver (about 160 KB, fetched in the background on that first tap), so a later tap with no signal, or on one bar that never answers, still reaches the app's offline copy within a few seconds.
 
 ## Running it
@@ -30,7 +30,7 @@ GitHub Pages serves it from `main`, `/ (root)`, at its own address (`CNAME`).
 
 ### Files
 
-- `index.html`, `css/app.css`, `js/app.js`: the Switchboard page.
+- `index.html`, `css/app.css`, `js/app.js`: the Switchboard page; `js/overrides.js` reads the resolver's `OVERRIDES`, so Check a tag shows where a tap really goes.
 - `404.html`: the resolver.
 - `ledger/Code.gs`: the ledger web app.
 - `js/kit/`, `css/kit.css`: the kit every tag app shares: ledger client, Web NFC, small UI helpers.
