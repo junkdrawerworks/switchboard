@@ -1392,8 +1392,9 @@ test('lists asked at once are taken in order: each keeps its own asked time and 
   assert.equal(sheet('mothball', 'totes')['01'].name, 'Lights and timers');
 });
 
-// A page going away (the tab closed, the phone locked) sends what's waiting with fetch's keepalive, which Chromium
-// refuses for a body of 64 KiB or more: only what fits under 60,000 bytes goes that way, the rest by ordinary sends.
+// Every send goes with fetch's keepalive, so it outlives a page that goes away while it's on its way (the tab closed, the
+// phone locked), but Chromium refuses a keepalive body of 64 KiB or more: only what fits under 60,000 bytes goes that
+// way, the rest by ordinary sends.
 async function pageWorld() {
   const w = await world();
   const was = { window: globalThis.window, document: globalThis.document };
@@ -1416,25 +1417,26 @@ async function pageWorld() {
   return { ...w, open, sends, win, hide, restore };
 }
 
-test('the page hidden or closed sends what is waiting with keepalive; lists and ordinary sends never use it', async () => {
+test('every send that fits goes with keepalive, so one on its way when the page hides or closes still arrives; lists never do', async () => {
   const p = await pageWorld();
   try {
     const a = p.open('larder');
     a.keepUp(['items', 'queue'], () => {});
     await a._syncing;
+    // Restocked sends at once; the phone locks, and the tab is swiped away, while Google answers
     a.put('items', { id: 'rice', name: 'Rice', state: 'ok' }); a.del('queue', 'q3');
-    p.hide();                                                        // the phone locked, or Chrome swiped away
-    await a.flush();
-    const ka = p.sends.filter(s => s.keepalive);
-    assert.deepEqual(ka.map(s => [s.op, s.n]), [['batch', 2]], 'the hidden page\'s send went without keepalive');
+    const sending = a.flush();
+    p.hide(); p.win.dispatchEvent(new Event('pagehide'));
+    await sending;
+    assert.deepEqual(p.sends.filter(s => s.op === 'batch').map(s => [s.n, s.keepalive]), [[2, true]], 'the send on its way when the page hid went without keepalive');
+    // a change left waiting when the page hides goes too, and ordinary saves and syncs as well
     a.put('items', { id: 'rice', name: 'Rice', state: 'low' });
-    p.win.dispatchEvent(new Event('pagehide'));                      // the tab closed
+    p.win.dispatchEvent(new Event('pagehide'));
     await a.flush();
-    assert.equal(p.sends.filter(s => s.keepalive).length, 2, 'pagehide sent nothing with keepalive');
-    a.put('items', { id: 'oats', name: 'Oats' }); await a.flush();   // an ordinary save, and a sync
+    a.put('items', { id: 'oats', name: 'Oats' }); await a.flush();
     await a.sync(['items', 'queue']);
-    assert.ok(p.sends.filter(s => !s.keepalive).some(s => s.op === 'batch'));
-    assert.deepEqual(p.sends.filter(s => s.keepalive).map(s => s.op), ['batch', 'batch'], 'a list or an ordinary send used keepalive');
+    assert.ok(p.sends.filter(s => s.op === 'batch').every(s => s.keepalive), 'a send that fits went without keepalive');
+    assert.ok(p.sends.filter(s => s.op === 'list').length > 0 && p.sends.filter(s => s.op === 'list').every(s => !s.keepalive), 'a list used keepalive');
     assert.equal(a.pending, 0);
     assert.equal(p.sheet('larder', 'items').rice.state, 'low');
   } finally { p.restore(); }

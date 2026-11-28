@@ -104,9 +104,11 @@ export async function publicReport(url, app, coll, doc, { fetchImpl = (...a) => 
 const RETRY = [5000, 15000, 30000, 60000, 120000];
 const TIMEOUT = 45000;
 const RESYNC = 30000; // coming back to the page brings it up to date, at most this often
-// A page going away (the tab closed, the phone locked) sends what's waiting with fetch's keepalive, so the send
-// outlives the page. Chromium refuses a keepalive body of 64 KiB or more before sending it, so only the first writes
-// whose request stays under this many bytes go that way; the rest wait for the next ordinary send.
+// Every send of writes goes with fetch's keepalive, so it outlives the page if the tab is closed or the phone locked
+// while it's on its way (Larder's Restocked, then the screen off); the ledger skips a write it has already made (its
+// stamp q), so one sent again after its answer was lost lands once. Chromium refuses a keepalive body of 64 KiB or more
+// before sending it, so only the first writes whose request stays under this many bytes go that way, and the rest
+// follow in the next send; a single write too big for it goes by an ordinary send. Lists never use it.
 const KEEPALIVE_MAX = 60000;
 const later = (fn, ms) => { const t = setTimeout(fn, ms); t?.unref?.(); return t; }; // unref: Node's tests don't wait on it
 export const CANT_REACH = 'Can\'t reach the ledger yet. This opens as soon as it can.';
@@ -242,7 +244,7 @@ export class Ledger {
 
   // One request. A failure says what kind it was (e.kind): offline (no signal, or no answer in 45 s), badkey (the key
   // changed), broken (a deployment set to "Only myself" or deleted: see unreadable()) or error (the ledger said no).
-  // keepalive only for a send as the page goes away (see flush).
+  // keepalive only for a send of writes (see flush and KEEPALIVE_MAX).
   async call(body, { keepalive = false } = {}) {
     if (this.demo) return this.demo.handle(clone(body));
     if (!this.connected) throw failed('not connected', 'unset');
@@ -356,14 +358,12 @@ export class Ledger {
   get pending() { this.fresh(); return this.outbox.length; }
   waiting(coll) { this.fresh(); return this.outbox.filter(o => o.coll === coll).map(o => o.id); }
 
-  // Sends the outbox, 40 at a time (the next batch goes on its own). Resolves false if the batch didn't go.
-  // { keepalive: true } as the page goes away: the first writes that fit a keepalive request (KEEPALIVE_MAX) go with
-  // it, and the rest by ordinary sends after it, if the page is still there; a first write too big for one goes by an
-  // ordinary send.
-  flush({ keepalive = false } = {}) {
+  // Sends the outbox, 40 at a time (the next batch goes on its own), each send with keepalive (KEEPALIVE_MAX). Resolves
+  // false if the batch didn't go.
+  flush() {
     if (this._flushing) return this._flushing;
     if (!this.outbox.length || !this.connected || this.stopped) return Promise.resolve(!this.outbox.length);
-    const p = this._flushing = this._flush(keepalive).finally(() => { if (this._flushing === p) this._flushing = null; });
+    const p = this._flushing = this._flush().finally(() => { if (this._flushing === p) this._flushing = null; });
     return p;
   }
   // How many of these writes fit one keepalive request: its body in bytes, as call() sends it, stays under KEEPALIVE_MAX.
@@ -373,10 +373,10 @@ export class Ledger {
     for (const o of ops) { bytes += size(JSON.stringify(o)) + (n ? 1 : 0); if (bytes >= KEEPALIVE_MAX) break; n++; }
     return n;
   }
-  async _flush(keepalive = false) {
+  async _flush() {
     this.fresh();
-    let ops = this.outbox.slice(0, 40);
-    if (keepalive && !this.demo) { const n = this.fits(ops); if (n) ops = ops.slice(0, n); else keepalive = false; }
+    let ops = this.outbox.slice(0, 40), keepalive = false;
+    if (!this.demo) { const n = this.fits(ops); keepalive = n > 0; if (n) ops = ops.slice(0, n); }
     let ok = false;
     try {
       await this.call({ op: 'batch', ops }, { keepalive });
@@ -467,8 +467,8 @@ export class Ledger {
     const on = (t, ev, fn) => { if (t?.addEventListener) { t.addEventListener(ev, fn); this.unlisten.push(() => t.removeEventListener(ev, fn)); } };
     on(w, 'online', () => this.wake(true));
     on(w, 'pageshow', e => { if (e.persisted) this.wake(); });
-    on(d, 'visibilitychange', () => { if (d.visibilityState === 'visible') this.wake(); else this.flush({ keepalive: true }); });
-    on(w, 'pagehide', () => this.flush({ keepalive: true }));   // the tab closed, or the page left for another
+    on(d, 'visibilitychange', () => { if (d.visibilityState === 'visible') this.wake(); else this.flush(); });
+    on(w, 'pagehide', () => this.flush());   // the tab closed, or the page left for another
     on(w, 'storage', e => {
       if (e.key == null || e.key === this.app + '.ledger') this.reconfig();
       if ((e.key == null || e.key.startsWith(this.app + '.')) && this.fresh()) { this.emit(); this.changed(); }
