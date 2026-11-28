@@ -141,13 +141,15 @@ test('a check may wait (a question in a sheet of its own), and a line alone or a
   const p = fakePage();
   const { sheet } = await import('../js/kit/ui.js');
   let answer, said = ['Still loading from the ledger. Try again in a moment.', { field: 'net' }, ''];
+  let asked = 0;
   const done = sheet({ title: 'New spice jar', fields: [{ name: 'name', label: 'Name' }, { name: 'net', label: 'Net weight' }],
-    check: () => new Promise(r => { answer = () => r(said.shift()); }) });
+    check: () => { asked++; return new Promise(r => { answer = () => r(said.shift()); }); } });
   let result = 'open';
   done.then(v => { result = v; });
   p.field('name').value = 'Sumac';
   p.submit(); await later();
   p.submit(); await later();                                         // a second press while it checks does nothing more
+  assert.equal(asked, 1, 'a second press while it checked asked again (Larder would open a second question)');
   answer(); await later();
   assert.equal(result, 'open');
   assert.equal(p.dialog().find(n => /sheet-msg/.test(n.className)).textContent, 'Still loading from the ledger. Try again in a moment.');
