@@ -1280,6 +1280,20 @@ test('a row cleared or deleted by hand in the sheet leaves the phones too, by th
   assert.deepEqual(a.docs('items').map(d => d.name), ['Beef stew']);
 });
 
+test('a tab deleted or renamed by hand: the next day\'s whole list keeps the phone\'s copy rather than clearing it', async t => {
+  const { open, sheets } = await world();
+  t.mock.timers.enable({ apis: ['Date'], now: Date.now() });
+  const a = open('frostbite');
+  a.put('items', { id: 'stew', name: 'Beef stew' }); a.put('zones', { id: 'top', name: 'Top basket' }); await a.flush();
+  await a.sync(['items', 'zones']);
+  delete sheets['frostbite.items'];                                 // the tab renamed (or deleted) in the sheet
+  sheets['frostbite.zones'].data.splice(1);                        // and every row of another tab deleted
+  t.mock.timers.tick(25 * 3600e3);
+  await a.sync(['items', 'zones']);
+  assert.deepEqual(a.docs('items').map(d => d.name), ['Beef stew'], 'a tab that isn\'t there emptied the phone');
+  assert.deepEqual(a.docs('zones'), [], 'rows deleted by hand stayed on the phone');
+});
+
 test('the day\'s whole list keeps a record that is waiting to go, or changed here after the list was asked for', async t => {
   const { net, open, sheets, g } = await world();
   t.mock.timers.enable({ apis: ['Date'], now: Date.now() });

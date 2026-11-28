@@ -182,7 +182,8 @@ const failed = (message, kind) => Object.assign(new Error(message), { kind });
 const TOUCH_KEEP = 120000;
 // Once a day each collection is listed whole, and a record the sheet no longer has at all (a row cleared or deleted by
 // hand, an earlier version of the sheet restored) leaves this phone too: a list of what changed can't say that. When it
-// was last listed whole is kept with the copy (fullAt).
+// was last listed whole is kept with the copy (fullAt). A ledger that has no tab for the collection at all (deleted or
+// renamed by hand) says so (none, from ledger 1.1), and the copy is kept.
 const FULL_EVERY = 24 * 3600e3;
 
 export class Ledger {
@@ -434,7 +435,7 @@ export class Ledger {
           if (!changed && JSON.stringify(mm.docs[d.id]) !== JSON.stringify(d)) changed = true;
           mm.docs[d.id] = d;
         }
-        if (full) {                                  // the whole list: what isn't in it has gone from the sheet
+        if (full && !j.none) {                       // the whole list: what isn't in it has gone from the sheet
           const have = new Set(j.docs.map(d => String(d.id)));
           for (const id of Object.keys(mm.docs)) if (!have.has(id) && !waiting.has(id) && !(touched[coll + '/' + id] >= asked)) { delete mm.docs[id]; changed = true; }
           mm.fullAt = asked;
