@@ -89,6 +89,42 @@ export async function targetsAudit({ browser, base, assert, hashes, skip = '' })
   } finally { await ctx.close(); }
 }
 
+// A sheet's buttons on a 320 px phone wrap (Larder's "Ounces or grams?": Keep 88 oz, Cancel, Use 88 g): 8 px between
+// rows as between buttons, so the main one isn't flush under the one above it; an empty line above them takes no room,
+// and a refused Save's line sits 8 px above them. At 390 px the same three fit on one row.
+async function sheetBarChecks(page, assert) {
+  const rows = () => page.evaluate(() => {
+    const bar = [...document.querySelectorAll('dialog[open] .sheet-bar')].at(-1), top = bar.getBoundingClientRect().top;
+    const bs = [...bar.querySelectorAll('button')].map(b => { const r = b.getBoundingClientRect(); return { t: b.textContent, top: r.top - top, bottom: r.bottom - top }; });
+    const msg = bar.querySelector('.sheet-msg').getBoundingClientRect();
+    return { bs, msgBottom: msg.bottom - top };
+  });
+  const open = () => page.evaluate(async () => {
+    const { sheet, h } = await import('./js/kit/ui.js');
+    sheet({ title: 'Ounces or grams?', body: h('p', {}, 'You typed 88 oz, which is 2495 g, more than most jars.'), ok: 'Use 88 g', other: 'Keep 88 oz' });
+  });
+  try {
+    await page.setViewportSize({ width: 320, height: 640 });
+    await open();
+    let { bs } = await rows();
+    const lines = [...new Set(bs.map(b => Math.round(b.top)))].sort((a, b) => a - b);
+    assert.ok(lines.length > 1, `at 320 px the sheet's buttons didn't wrap: ${JSON.stringify(bs)}`);
+    for (const a of bs) for (const b of bs) if (b.top > a.bottom - 1) assert.ok(b.top - a.bottom >= 7.5, `at 320 px "${b.t}" sits ${(b.top - a.bottom).toFixed(1)} px under "${a.t}"; the rows need 8 px between them`);
+    assert.ok(Math.abs(Math.min(...bs.map(b => b.top)) - 8) < 1, `an empty line above the buttons takes room: the first row starts ${Math.min(...bs.map(b => b.top)).toFixed(1)} px into the bar`);
+    await page.evaluate(() => { [...document.querySelectorAll('dialog[open] .sheet-msg')].at(-1).textContent = 'Not saved. Check the net weight and its unit.'; });
+    const said = await rows();
+    assert.ok(Math.min(...said.bs.map(b => b.top)) - said.msgBottom >= 7.5, 'a refused Save\'s line touches the buttons under it');
+    await page.evaluate(() => [...document.querySelectorAll('dialog[open]')].forEach(d => d.close()));
+    await page.setViewportSize({ width: 390, height: 844 });
+    await open();
+    ({ bs } = await rows());
+    assert.equal(new Set(bs.map(b => Math.round(b.top))).size, 1, `at 390 px the sheet's three buttons don't fit on one row: ${JSON.stringify(bs)}`);
+  } finally {
+    await page.evaluate(() => [...document.querySelectorAll('dialog[open]')].forEach(d => d.close()));
+    await page.setViewportSize({ width: 390, height: 844 });
+  }
+}
+
 export async function kitChecks({ browser, base, assert }) {
   for (const dark of [false, true]) {
     const scheme = dark ? 'dark' : 'light';
@@ -146,6 +182,7 @@ export async function kitChecks({ browser, base, assert }) {
         await page.evaluate(async () => { const { toast } = await import('./js/kit/ui.js'); toast('Saved.'); });
         await page.waitForTimeout(2300);
         assert.equal(await page.locator('#toast.show').count(), 1, 'a short toast went before 2.6 s');
+        await sheetBarChecks(page, assert);
       }
       // the sample's way out (in every app that has a sample): at least 44 px tall
       if (await page.evaluate(() => fetch('js/app.js').then(r => r.text()).then(t => t.includes('sampleLink')))) {
