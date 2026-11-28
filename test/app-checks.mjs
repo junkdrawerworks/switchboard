@@ -76,6 +76,22 @@ export async function resolverChecks({ browser, assert }) {
     srv.patch = b => b.replace('var OVERRIDES = {\n};', "var OVERRIDES = {\n  'h/water-heater': 'https://example.com/manual'\n};");
     r = await tap('/h/water-heater');
     assert.equal(r.url, 'https://example.com/manual', 'a phone with the offline copy missed a change to OVERRIDES');
+    // and Check a tag on Switchboard's own page reads the same OVERRIDES: it shows, and Open goes to, where the tap went
+    const sb = await ctx.newPage();
+    await sb.addInitScript(fakeNfc);
+    await sb.goto(srv.base);
+    const checked = async url => {
+      await sb.click('#check-btn');
+      await sb.waitForFunction(() => /^Listening/.test(document.querySelector('#check-msg').textContent));
+      await sb.evaluate(u => window.__nfc.tap(u), url);
+      await sb.waitForSelector('#check-out:not([hidden])');
+      return { to: await sb.locator('#check-out code').textContent(), open: await sb.locator('#check-out a.btn').getAttribute('href'),
+        why: await sb.locator('#check-out p.muted').allTextContents() };
+    };
+    assert.deepEqual(await checked('https://tag.junkdrawer.works/h/water-heater'), { to: 'https://example.com/manual', open: 'https://example.com/manual',
+      why: ['Sent here by OVERRIDES in 404.html.'] }, 'Check a tag shows the old page for a sticker OVERRIDES sends elsewhere');
+    assert.deepEqual(await checked('https://tag.junkdrawer.works/h/smoke-co'), { to: 'https://placard.junkdrawer.works/#smoke-co', open: 'https://placard.junkdrawer.works/#smoke-co', why: [] });
+    await sb.close();
     srv.patch = null;
     assert.deepEqual(errors, [], 'errors on the resolver page');
   } finally {

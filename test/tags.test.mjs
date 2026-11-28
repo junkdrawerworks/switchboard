@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import { APPS, parseTag, resolve, tagUrl, slug, newId, uniqueSlug } from '../js/kit/tags.js';
+import { readOverrides } from '../js/overrides.js';
 
 test('tag links round-trip', () => {
   assert.equal(tagUrl('h', 'water-heater'), 'https://tag.junkdrawer.works/h/water-heater');
@@ -47,7 +48,7 @@ function runResolver(pathname, overrides = '') {
   vm.createContext(ctx);
   ctx.window = ctx; // the page's globals are window's, as in a browser
   for (const [, script] of html.matchAll(/<script>([\s\S]*?)<\/script>/g)) vm.runInContext(script, ctx);
-  return { went: ctx.went, routes: ctx.ROUTES, names: ctx.NAMES, registered: ctx.registered, here: el('here').textContent, points: !el('points').hidden,
+  return { html, went: ctx.went, routes: ctx.ROUTES, names: ctx.NAMES, overrides: { ...ctx.OVERRIDES }, registered: ctx.registered, here: el('here').textContent, points: !el('points').hidden,
     title: els.title.textContent, shown: !els.app.hidden ? `${el('why').textContent} ${el('name').textContent} ${el('open').href}` : '' };
 }
 
@@ -99,4 +100,26 @@ test('the resolver page: overrides in any case, and a link cut short or mistyped
     const r = runResolver(path);
     assert.deepEqual([r.went, r.title, r.shown], [undefined, 'This tag isn\'t set up', ''], path);
   }
+});
+
+test('Check a tag reads OVERRIDES as the resolver does, so it shows where a tap really goes', () => {
+  // as shipped: none
+  assert.deepEqual(readOverrides(runResolver('/nothing').html), {});
+  assert.deepEqual(runResolver('/nothing').overrides, {});
+  // the owner's lines, each way they might be typed: either quote, any case, a comma or none at the end, one commented out
+  for (const lines of [
+    "  'h/water-heater': 'https://placard.junkdrawer.works/#water-shutoff'",
+    "  'H/Boiler': 'https://example.com/boiler',\n  \"h/well-tank\": \"https://example.com/tank?a=1&b=2\",\n  // 'h/old': 'https://example.com/old',\n  'm/03':'https://example.com/pack'",
+    "  /* moved in March */ 'h/range': 'https://example.com/range', // the new one\n"]) {
+    const r = runResolver('/nothing', lines);
+    assert.deepEqual(readOverrides(r.html), r.overrides, `Check a tag and the resolver read OVERRIDES differently: ${lines}`);
+    assert.ok(Object.keys(r.overrides).length, 'the resolver took none of them: ' + lines);
+  }
+  // and where the resolver sends the sticker is where Check a tag says it goes
+  const o = "  'H/Water-Heater': 'https://placard.junkdrawer.works/#water-shutoff'";
+  const r = runResolver('/h/water-heater', o);
+  assert.equal(resolve('h', 'water-heater', readOverrides(r.html)), r.went);
+  assert.equal(resolve('h', 'well-tank', readOverrides(r.html)), 'https://placard.junkdrawer.works/#well-tank');
+  // the block the reader looks for is in 404.html, in its shape
+  assert.match(readFileSync(new URL('../404.html', import.meta.url), 'utf8'), /\nvar OVERRIDES = \{\n\};\n/, '404.html\'s OVERRIDES block changed shape: change js/overrides.js with it');
 });

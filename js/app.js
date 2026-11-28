@@ -3,6 +3,7 @@ import { APPS, parseTag, resolve, tagUrl } from './kit/tags.js';
 import { Ledger, connectLink } from './kit/ledger.js';
 import { readOnce, explainNfc, nfcSupported, cancelNfc } from './kit/nfc.js';
 import { nfcPanel } from './kit/panel.js';
+import { readOverrides } from './overrides.js';
 
 const ledger = new Ledger('switchboard');
 const appOrder = ['h', 't', 'p', 'f', 'm'];
@@ -11,6 +12,9 @@ const blurb = { h: 'The rental house manual', t: 'Seasonal totes', p: 'Consumabl
 if (location.hash === '#test') { $('#test-ok').hidden = false; history.replaceState(null, '', location.pathname); }
 
 // ---- check a tag
+// Where a sticker goes is what the resolver says: its OVERRIDES, read from 404.html (this site's own; with no signal the
+// worker's copy), then the app the letter belongs to.
+const overrides = fetch('404.html').then(r => r.text()).then(readOverrides).catch(() => ({}));
 // Each press is one read. While it listens the button says Stop, and a press stops it. A read that Stop (or a newer
 // press) ended says nothing more, so its "Stopped." can't land on top of the next press's "Listening" line.
 let reading = 0, presses = 0;
@@ -25,6 +29,7 @@ checkBtn.addEventListener('click', async () => {
   msg.textContent = 'Listening. Hold the sticker flat against the back of the phone, near the top.'; msg.className = 'msg wait'; out.hidden = true;
   try {
     const { url, serial } = await readOnce();
+    const sent = await overrides;
     if (reading !== me) return;
     idle(); buzz(50);
     const t = parseTag(url);
@@ -32,10 +37,11 @@ checkBtn.addEventListener('click', async () => {
     if (!url) mount(out, h('p', {}, 'That sticker is blank.'), h('p', { class: 'muted mono' }, serial));
     else if (!t) mount(out, h('p', {}, 'Not a Switchboard tag. It holds:'), h('code', { class: 'url' }, url));
     else {
-      const to = resolve(t.letter, t.id);
+      const to = resolve(t.letter, t.id, sent);
       mount(out,
         h('div', { class: 'tape-wrap' }, h('span', { class: 'tape-cap' }, `${t.letter} / ${APPS[t.letter]?.name || 'no app'}`), h('div', { class: 'tape' }, t.id)),
         to ? h('p', {}, 'Goes to ', h('code', {}, to)) : h('p', {}, 'No app owns this letter.'),
+        sent[`${t.letter}/${t.id}`] ? h('p', { class: 'muted' }, 'Sent here by OVERRIDES in 404.html.') : null,
         to ? h('div', { class: 'btns' }, h('a', { class: 'btn', href: to }, 'Open')) : null);
     }
   } catch (e) {
