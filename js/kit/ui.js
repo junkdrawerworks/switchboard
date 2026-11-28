@@ -128,6 +128,25 @@ export async function held(btn, p, busy = 'Checking…') {
   }
 }
 
+// Save a copy (Placard, Mothball): data as a JSON file the browser downloads (on Android, to Downloads), named name.
+export function saveFile(name, data) {
+  const a = h('a', { href: URL.createObjectURL(new Blob([JSON.stringify(data, null, 1) + '\n'], { type: 'application/json' })), download: name });
+  document.body.append(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+}
+// A saved copy being imported has records that were deleted here since it was saved (saved: when, an ISO time): which to
+// bring back, each ticked to start with. items: [{ key, label }]. Resolves to the keys ticked, or [] for Leave deleted
+// (or the sheet closed).
+export async function bringBack(items, saved, [one, many] = ['record', 'records']) {
+  const when = Date.parse(saved), since = `deleted here since this copy was saved${Number.isFinite(when) ? ` (${stampText(when)})` : ''}`;
+  const boxes = items.map(it => h('input', { type: 'checkbox', checked: true, value: it.key }));
+  const v = await sheet({ title: items.length > 1 ? `Bring back ${items.length} ${many}?` : `Bring back ${items[0].label}?`, ok: 'Bring back', cancel: 'Leave deleted',
+    body: items.length > 1 ? h('div', {}, h('p', {}, `These ${many} were ${since}. Untick any to leave deleted.`),
+      h('ul', { class: 'picks' }, items.map((it, i) => h('li', {}, h('label', { class: 'pick' }, boxes[i], h('span', {}, it.label))))))
+      : h('p', {}, `This ${one} was ${since}.`) });
+  return v ? items.filter((it, i) => boxes[i].checked).map(it => it.key) : [];
+}
+
 // A yes or no. { danger: true } for one that can't be undone (Delete, Lock it, Clear it): its button is red, not the
 // app's colour in Save's place.
 export function confirmSheet(title, text, ok = 'OK', { danger = false } = {}) {

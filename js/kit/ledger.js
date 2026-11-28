@@ -166,9 +166,10 @@ export function fillIn(here, file, custom = {}) {
   return { doc, filled, kept };
 }
 // What an import did, for its toast: 'Added 2, filled in 3, kept your edits.', 'Nothing new in the file; your edits
-// stay.', '…; left out 1 you deleted', '…; skipped 1 (id "Tote 6")'. what: ['page', 'pages'] names what was added.
-export function importSummary({ added = 0, filled = 0, kept = 0, gone = 0, skipped = [] }, what = null) {
-  const did = [added ? `added ${added}${what ? ' ' + what[added === 1 ? 0 : 1] : ''}` : '', filled ? `filled in ${filled}` : ''].filter(Boolean);
+// stay.', '…; left out 1 you deleted', '…; skipped 1 (id "Tote 6")', 'Filled in 1, brought back 2.' (back: records a
+// saved copy had that were deleted here since, brought back when asked). what: ['page', 'pages'] names what was added.
+export function importSummary({ added = 0, filled = 0, kept = 0, gone = 0, back = 0, skipped = [] }, what = null) {
+  const did = [added ? `added ${added}${what ? ' ' + what[added === 1 ? 0 : 1] : ''}` : '', filled ? `filled in ${filled}` : '', back ? `brought back ${back}` : ''].filter(Boolean);
   let text = did.length ? did.join(', ') : 'nothing new in the file';
   if (kept) text += did.length ? ', kept your edits' : '; your edits stay';
   if (gone) text += `; left out ${gone} you deleted`;

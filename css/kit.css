@@ -144,6 +144,12 @@ ul.plain li { overflow-wrap: anywhere; }
 .sheet-bar .sheet-msg { flex: 1 0 100%; margin: 0; } /* a Save the app refused, said above the buttons */
 .sheet-bar .sheet-msg:empty { position: absolute; } /* out of the rows, so no gap under it; not display: none, so it's still announced */
 
+/* a checklist in a sheet (Bring back …?), each a row a thumb can't miss */
+.picks { border: 0; padding: 0; margin: 0 0 12px; min-width: 0; list-style: none; }
+.pick { display: flex; align-items: center; gap: 10px; min-height: 44px; cursor: pointer; }
+.pick input { width: 22px; height: 22px; accent-color: var(--accent); flex: none; margin: 0; }
+.pick span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+
 /* toast: centred, as wide as its words up to the phone's width less the margins (left: 50% would halve that) */
 .toast { position: fixed; left: 16px; right: 16px; margin: 0 auto; width: fit-content; max-width: calc(100vw - 32px); bottom: calc(18px + env(safe-area-inset-bottom, 0)); transform: translateY(140%); background: var(--ink); color: var(--bg); padding: 10px 16px; border-radius: 10px; font-weight: 600; transition: transform .2s ease; z-index: 10; }
 .toast.show { transform: translateY(0); }

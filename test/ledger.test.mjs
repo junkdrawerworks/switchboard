@@ -849,6 +849,9 @@ test('an import fills in and never blanks or replaces: fillIn, what the toast sa
   assert.equal(importSummary({ added: 2, filled: 3, kept: 4 }), 'Added 2, filled in 3, kept your edits.');
   assert.equal(importSummary({ added: 1, skipped: ['id "Tote 6"'] }, ['page', 'pages']), 'Added 1 page; skipped 1 (id "Tote 6").');
   assert.equal(importSummary({ added: 16 }, ['page', 'pages']), 'Added 16 pages.');
+  // a saved copy's records brought back, and the ones left deleted
+  assert.equal(importSummary({ filled: 1, back: 2, gone: 1 }, ['page', 'pages']), 'Filled in 1, brought back 2; left out 1 you deleted.');
+  assert.equal(importSummary({ back: 1 }), 'Brought back 1.');
   assert.equal(importSummary({ kept: 2, gone: 1 }), 'Nothing new in the file; your edits stay; left out 1 you deleted.');
   assert.equal(importSummary({ skipped: ['a', 'b', 'c', 'd'] }), 'Nothing new in the file; skipped 4 (a, b, c, …).');
   const a = open('mothball');
