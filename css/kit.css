@@ -8,7 +8,7 @@
 :root {
   --bg: #F1EFE8; --panel: #FFFFFF; --ink: #1D1E1B; --ink2: #5C5F57; --ink3: #696C64; --line: #D8D6CC; --soft: #E7E4DA;
   --accent: #1D1E1B; --accent-ink: #F6F4EC; --tape: #F3C22F; --tape-ink: #1D1E1B; --tape-edge: #C99A12;
-  --ok: #2D794D; --ok-soft: #DDEFE3; --warn: #8A5A00; --warn-soft: #F7EAC8; --bad: #B3261E; --bad-soft: #F7DEDB;
+  --ok: #2C754B; --ok-soft: #DDEFE3; --warn: #8A5A00; --warn-soft: #F7EAC8; --bad: #B3261E; --bad-soft: #F7DEDB;
   --display: "Barlow Condensed", "Arial Narrow", system-ui, sans-serif;
   --body: "Barlow", system-ui, -apple-system, "Segoe UI", sans-serif;
   --mono: "JetBrains Mono", ui-monospace, Menlo, monospace;
@@ -94,12 +94,14 @@ button.row:active, a.row:active { transform: scale(.995); }
 
 /* chips */
 .chip { display: inline-block; font: 600 12px/1 var(--body); letter-spacing: .06em; text-transform: uppercase; padding: 5px 8px; border-radius: 999px; background: var(--soft); color: var(--ink2); white-space: nowrap; }
-.chip.ok { background: var(--ok-soft); color: var(--ok); }
+.chip.ok { background: var(--ok-soft); color: var(--ok); } /* 4.67:1 light (#2D794D was 4.43), 6.13:1 dark */
 .chip.warn { background: var(--warn-soft); color: var(--warn); }
 .chip.bad { background: var(--bad-soft); color: var(--bad); }
 .chip.acc { background: var(--accent); color: var(--accent-ink); }
 
 /* buttons */
+/* the app's colour behind its button's words: 4.5:1 or more, light and dark (kit-checks), so each app's --accent is dark
+   enough for --accent-ink on it */
 .btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; border: 2px solid var(--accent); background: var(--accent); color: var(--accent-ink); border-radius: 10px; padding: 10px 16px; font-weight: 600; min-height: 44px; text-decoration: none; }
 .btn.ghost { background: transparent; color: var(--ink); border-color: var(--line); }
 .btn.danger { background: var(--bad); border-color: var(--bad); color: var(--panel); } /* as the red toast: 6.5:1 light, 6.6:1 dark */

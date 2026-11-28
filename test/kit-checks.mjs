@@ -1,5 +1,5 @@
 // The house kit's own checks, run by test/e2e.mjs in every tag app (copied from the build folder's common/kit by
-// scaffold.py): the keyboard focus ring and the red toast can be seen, light and dark, a toast is announced and stays
+// scaffold.py): the keyboard focus ring, the red toast, the app's button and the ok chip can be seen, light and dark, a toast is announced and stays
 // long enough to read, the sample's Leave the sample is a target a thumb can't miss, and the page shrinks above the
 // on-screen keyboard. fieldsUnderBar, backKeepsPlace and targetsAudit are for the apps' own checks.
 // WCAG relative luminance and contrast ratio of two computed colours ('rgb(…)' or 'rgba(…)').
@@ -169,6 +169,15 @@ export async function kitChecks({ browser, base, assert }) {
         const s = getComputedStyle(b), out = { color: s.color, bg: s.backgroundColor }; b.remove(); return out; });
       const rr = contrast(red.color, red.bg);
       assert.ok(rr >= 4.5, `${scheme}: the red Delete button is ${rr.toFixed(2)}:1 (${red.color} on ${red.bg}); it needs 4.5:1`);
+      // the app's own button (Save, Add, Lend) and the green ok chip: their words against their colour, 4.5:1 for text
+      // their size (Frostbite's blue and Packrat's teal were 4.28 and 4.19, the ok chip 4.43)
+      const words = await page.evaluate(() => [['the app\'s button', 'button', 'btn', 'Save'], ['the ok chip', 'span', 'chip ok', 'ok']].map(([what, tag, cls, text]) => {
+        const el = document.createElement(tag); el.className = cls; el.textContent = text; document.body.append(el);
+        const s = getComputedStyle(el), out = { what, color: s.color, bg: s.backgroundColor }; el.remove(); return out; }));
+      for (const w of words) {
+        const r = contrast(w.color, w.bg);
+        assert.ok(r >= 4.5, `${scheme}: ${w.what}'s words are ${r.toFixed(2)}:1 (${w.color} on ${w.bg}); they need 4.5:1`);
+      }
       if (!dark) {
         // the page shrinks above the on-screen keyboard (Chrome on Android otherwise lays it over the sheet's Save bar)
         assert.match(await page.evaluate(() => document.querySelector('meta[name=viewport]')?.content || ''), /interactive-widget=resizes-content/,
