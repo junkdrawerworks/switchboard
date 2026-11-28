@@ -20,24 +20,41 @@ export async function writeUrl(url, { overwrite = true } = {}) {
   } finally { if (active === ctl) active = null; }
 }
 
+// Two readings of the same sticker: by its serial number, or by what it holds when Chrome gives no serial.
+export const sameSticker = (a, b) => a.serial || b.serial ? a.serial === b.serial : a.url === b.url;
+const wrongTag = why => Object.assign(new Error(why), { name: 'WrongTagError' });
+
 // Makes the sticker read-only, for good. Chrome 100+; the tag stays readable by any phone. check(sticker), when given,
 // reads the sticker first ({ serial, url, blank }, as readOnce) and returns why it mustn't be locked ('' to go on): the
 // lock is then made on the same sticker, still against the phone, and a refusal throws a WrongTagError carrying the
-// reason, with nothing locked.
+// reason, with nothing locked. Chrome makes a lock on whichever sticker it has: one that has left the phone by the time
+// the lock is asked for (a quick swipe) leaves the lock waiting for the next to come near, which is locked on arrival,
+// unchecked. So the lock gets 1.5 s (on a sticker still against the phone it takes a moment), then is called off with
+// nothing locked; and a reading of another sticker before the lock lands (Chrome reads a sticker to the scan before it
+// locks it) means that one may have been locked instead: a WrongTagError either way, so the page isn't saved locked.
+export const LOCK_WITHIN = 1500;
 export async function lockTag({ check = null, timeout = 30000 } = {}) {
   const ctl = job();
-  let scan = null;
+  let scan = null, late = false, timer = null;
   try {
     const r = new NDEFReader();
     if (typeof r.makeReadOnly !== 'function') throw Object.assign(new Error('This Chrome can\'t lock tags.'), { name: 'NotSupportedError' });
-    if (check) {
-      const got = await readOn(r, ctl, timeout, true);
-      scan = got.scan;
-      const why = check(got.sticker);
-      if (why) throw Object.assign(new Error(why), { name: 'WrongTagError' });
-    }
-    await r.makeReadOnly({ signal: ctl.signal });
-  } finally { scan?.abort(); if (active === ctl) active = null; }
+    if (!check) { await r.makeReadOnly({ signal: ctl.signal }); return; }
+    const got = await readOn(r, ctl, timeout, true);
+    scan = got.scan;
+    const why = check(got.sticker);
+    if (why) throw wrongTag(why);
+    let other = false;
+    r.onreading = ev => { if (!sameSticker({ serial: ev.serialNumber || '', url: urlOf(ev) }, got.sticker)) other = true; };
+    const lock = r.makeReadOnly({ signal: ctl.signal });
+    const gone = new Promise(resolve => { timer = setTimeout(() => { late = true; ctl.abort(); resolve(); }, LOCK_WITHIN); });
+    try { await Promise.race([lock, gone]); } catch (e) { if (!late) throw e; }
+    if (late) { lock.catch(() => {}); throw wrongTag('The sticker moved before it was locked. Hold it still against the phone and press Lock sticker again. Nothing was locked.'); }
+    // the reading and the lock's answer come back to the page on separate channels: a moment for a reading sent first
+    clearTimeout(timer);
+    await new Promise(resolve => setTimeout(resolve, 150));
+    if (other) throw wrongTag('Another sticker came near the phone and may have been locked instead. This page\'s sticker isn\'t marked locked: tap both to check.');
+  } finally { clearTimeout(timer); scan?.abort(); if (active === ctl) active = null; }
 }
 
 // Waits for one sticker and returns { serial, url, blank } (url is the first link record, or ''; blank: no record but
@@ -47,6 +64,14 @@ export async function readOnce({ timeout = 30000 } = {}) {
   const ctl = job();
   try { return (await readOn(new NDEFReader(), ctl, timeout, false)).sticker; }
   finally { if (active === ctl) active = null; }
+}
+
+// The first link a reading holds, or ''.
+function urlOf(ev) {
+  for (const rec of ev.message?.records || []) {
+    if (rec.recordType === 'url' || rec.recordType === 'absolute-url') return new TextDecoder().decode(rec.data);
+  }
+  return '';
 }
 
 // The read under readOnce and lockTag: reader r scans with a controller of its own, stopped with the job's (Stop, a
@@ -66,12 +91,8 @@ async function readOn(r, ctl, timeout, keep) {
       const t = setTimeout(() => { settle(reject, Object.assign(new Error('No tag within the time'), { name: 'TimeoutError' })); scan.abort(); }, timeout);
       ctl.signal.addEventListener('abort', () => settle(reject, stopped()));
       r.onreading = ev => {
-        let url = '';
         const recs = [...(ev.message?.records || [])];
-        for (const rec of recs) {
-          if (rec.recordType === 'url' || rec.recordType === 'absolute-url') { url = new TextDecoder().decode(rec.data); break; }
-        }
-        settle(resolve, { serial: ev.serialNumber || '', url, blank: recs.every(rec => rec.recordType === 'empty') });
+        settle(resolve, { serial: ev.serialNumber || '', url: urlOf(ev), blank: recs.every(rec => rec.recordType === 'empty') });
         if (!keep) scan.abort(); // stop listening
       };
       r.onreadingerror = () => {}; // a blank or unreadable tag: keep listening
@@ -80,8 +101,10 @@ async function readOn(r, ctl, timeout, keep) {
   } catch (e) { scan.abort(); throw e; }
 }
 
-// A write turned down because the sticker already holds something (overwrite:false), or because it's locked: Chrome
-// says NotAllowedError for both. Not one turned down for NFC permission or a missing tap on the button.
+// A write turned down because the sticker already holds something (overwrite:false): Chrome says NotAllowedError. Not
+// one turned down for NFC permission or a missing tap on the button. Chrome lets go of the sticker after it: it's only
+// read or written again once it comes near the phone again (taken off and held there). A locked sticker isn't this:
+// writing one fails as an IO error, a NetworkError, as does a sticker that leaves the phone mid-write.
 export const refusedWrite = e => e?.name === 'NotAllowedError' && !/activation|gesture|permission/i.test(e.message || '');
 
 // What went wrong, in one plain line. The NFC switch is where Google's Pixel Help puts it
@@ -95,7 +118,8 @@ export async function explainNfc(e, what = 'write') {
   if (perm === 'denied') return 'NFC is blocked for this site. Allow it in Chrome: the icon left of the address → Permissions → NFC.';
   if (e.name === 'NotAllowedError' && /activation|gesture/i.test(e.message)) return 'Chrome wants a fresh tap. Press the button again.';
   if (e.name === 'NotAllowedError' && /permission/i.test(e.message)) return 'NFC isn\'t allowed for this site yet. Press the button and allow it when Chrome asks.';
-  if (e.name === 'NotAllowedError' && what === 'write') return 'That sticker is locked. Use a blank one.';
+  // Chrome's IO error: Android's write failed, for a sticker that left the phone or one that's locked (it can't tell)
+  if (e.name === 'NetworkError' && what === 'write') return 'Couldn\'t write it: the sticker moved away, or it\'s locked. Hold it still and press Write again; if this comes back, it\'s locked: use a blank one.';
   if (e.name === 'NotReadableError') return 'NFC looks switched off. Turn it on in the phone\'s settings (Connected devices → Connection preferences → NFC).';
   if (e.name === 'NotSupportedError' && /NFC is not supported|unavailable/i.test(e.message)) return 'This phone or browser can\'t use NFC. Use Chrome on the Android phone.';
   if (e.name === 'NotSupportedError') return what === 'lock' ? 'This sticker can\'t be locked, or this Chrome can\'t lock it.' : 'That tag isn\'t one Chrome can write. NTAG213/215/216 stickers work.';

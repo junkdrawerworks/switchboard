@@ -1,6 +1,6 @@
 // The sticker panel every item screen uses: shows the tag link and writes it (and, where asked, locks it).
 import { h, buzz, sheet, confirmSheet, dayText } from './ui.js';
-import { nfcSupported, writeUrl, lockTag, readOnce, refusedWrite, explainNfc, cancelNfc } from './nfc.js';
+import { nfcSupported, writeUrl, lockTag, readOnce, refusedWrite, sameSticker, explainNfc, cancelNfc } from './nfc.js';
 import { parseTag } from './tags.js';
 
 // Two links for the same sticker: the same tag (any case, a trailing slash), or the same text.
@@ -46,21 +46,27 @@ export function nfcPanel(url, { label = 'Write sticker', lock = false, onWritten
     catch (e) { buzz([40, 60, 40]); say(await explainNfc(e, what), e.name === 'AbortError' ? '' : 'bad'); return null; }
     finally { st.busy = ''; labels(); }
   };
-  // Write tries first not to write over anything. A sticker that already holds something is read where it is, against
-  // the phone: this link already ('same', nothing written); nothing after all (a blank one turned down anyway: written);
-  // or something else, written over only when asked, so the jar or bin next door can't be rewritten by accident while
-  // the sticker in the hand stays blank. Locked, the write over says so.
+  // Write tries first not to write over anything. A sticker that already holds something is read: this link already
+  // ('same', nothing written); nothing after all (a blank one turned down anyway: written); or something else, written
+  // over only when asked, so the jar or bin next door can't be rewritten by accident while the sticker in the hand stays
+  // blank. Chrome lets go of a sticker that turned a write down, and reads it again only once it comes near the phone
+  // again, so the panel asks for that. After the question it's read once more, and written over only if it's the one
+  // asked about (the sticker that left the phone meanwhile isn't swapped for its neighbour). Locked, the write over
+  // fails and says it may be locked.
   const write = async () => {
     try { await writeUrl(url, { overwrite: false }); return 'written'; }
     catch (e) { if (!refusedWrite(e)) throw e; }
+    say('This sticker already holds something. Take it off the phone, then hold it there again.', 'wait');
     const held = await readOnce();
     if (held.url && sameLink(held.url, url)) return 'same';
     if (!held.blank) {
       const what = held.url ? `It already opens ${opens(held.url, nameOf)}.` : 'It already holds something that isn\'t a link.';
       if (!await confirmSheet('Write over this sticker?', `${what} Writing over it makes it open ${name} instead. Hold it to the phone again after you press Write over it.`, 'Write over it', { danger: true })) return 'kept';
       say(HOLD, 'wait');
+      const again = await readOnce();
+      if (!sameSticker(again, held)) throw Object.assign(new Error('That\'s a different sticker from the one you said to write over. Nothing written.'), { name: 'WrongTagError' });
     }
-    await writeUrl(url, { overwrite: true });
+    await writeUrl(url, { overwrite: true });   // the sticker just read: Chrome still has it
     return 'written';
   };
   btns.append(h('button', { type: 'button', class: 'btn', 'data-what': 'write', 'data-label': label, onclick: async () => {

@@ -139,12 +139,13 @@ export async function resolverChecks({ browser, assert }) {
   }
 }
 
-// A pretend Chrome NFC reader: scan() listens until its signal aborts; __nfc.tap(url) holds a sticker to it (no url: a
-// blank one) and says whether anything was listening. A write meets __nfc.sticker (null: a blank one): one holding a
-// link (or refuse: one Chrome takes for holding something) turns down a write that mustn't write over it, and a locked
-// one turns down every write, both with a NotAllowedError, as Chrome does.
+// A pretend Chrome NFC reader: scan() listens until its signal aborts; __nfc.tap(url, serial) holds a sticker to it (no
+// url: a blank one) and says whether anything was listening. A write meets __nfc.sticker (null: a blank one): one
+// holding a link (or refuse: one Chrome takes for holding something) turns down a write that mustn't write over it with
+// a NotAllowedError, and a locked one fails every write as Chrome's IO error, a NetworkError. As in Chrome, either lets
+// go of the sticker (__nfc.held false): a write waits until a tap brings a sticker near again, and only a tap is read.
 const fakeNfc = () => {
-  window.__nfc = { readers: [], writes: [], sticker: null };
+  window.__nfc = { readers: [], writes: [], sticker: null, held: true, waiting: null };
   window.NDEFReader = class {
     async scan({ signal } = {}) {
       if (signal?.aborted) throw new DOMException('aborted', 'AbortError');
@@ -152,17 +153,20 @@ const fakeNfc = () => {
       signal?.addEventListener('abort', () => { this.listening = false; });
     }
     async write(m, { overwrite = true } = {}) {
-      const s = window.__nfc.sticker;
-      if (s?.locked) throw new DOMException('', 'NotAllowedError');
-      if (s && !overwrite && (s.url || s.refuse)) throw new DOMException('NDEFWriteOptions#overwrite does not allow overwrite.', 'NotAllowedError');
-      window.__nfc.writes.push(m.records[0].data);
+      const n = window.__nfc;
+      if (!n.held) await new Promise(resolve => { n.waiting = resolve; });
+      const s = n.sticker;
+      if (s && !overwrite && (s.url || s.refuse)) { n.held = false; throw new DOMException('NDEFWriteOptions#overwrite does not allow overwrite.', 'NotAllowedError'); }
+      if (s?.locked) { n.held = false; throw new DOMException('Failed to write due to an IO error: null', 'NetworkError'); }
+      n.writes.push(m.records[0].data);
     }
   };
-  window.__nfc.tap = url => {
-    const r = window.__nfc.readers.filter(x => x.listening).at(-1);
-    if (!r?.onreading) return false;
-    r.onreading({ serialNumber: '04:a2:19:7c:5e:11:90', message: { records: url ? [{ recordType: 'url', data: new TextEncoder().encode(url) }] : [] } });
-    return true;
+  window.__nfc.tap = (url, serial = '04:a2:19:7c:5e:11:90') => {
+    const n = window.__nfc, r = n.readers.filter(x => x.listening).at(-1);
+    n.held = true;
+    if (r?.onreading) r.onreading({ serialNumber: serial, message: { records: url ? [{ recordType: 'url', data: new TextEncoder().encode(url) }] : [] } });
+    const w = n.waiting; n.waiting = null; w?.();
+    return !!r?.onreading || !!w;
   };
 };
 
@@ -213,12 +217,14 @@ async function checkATag({ page, base, assert }) {
 // panel, the same in every app.
 async function writeOver({ page, assert }) {
   const said = () => page.locator('#test-panel .nfc > .msg:last-child').evaluate(el => [el.className, el.textContent]);
+  const listening = () => page.waitForFunction(() => window.__nfc.readers.some(r => r.listening));
   const press = async (sticker, holds) => {
-    await page.evaluate(s => { window.__nfc.sticker = s; }, sticker);
+    await page.evaluate(s => { window.__nfc.sticker = s; window.__nfc.held = true; }, sticker);
     await page.click('#test-panel >> text=Write test sticker');
     if (holds === undefined) return;
-    // turned down: the panel reads what the sticker holds, still against the phone
-    await page.waitForFunction(() => window.__nfc.readers.some(r => r.listening));
+    // turned down: Chrome has let go of it, so the panel asks for it to be taken off and held there again, and reads it
+    await listening();
+    assert.deepEqual(await said(), ['msg wait', 'This sticker already holds something. Take it off the phone, then hold it there again.']);
     assert.equal(await page.evaluate(u => window.__nfc.tap(u), holds), true);
   };
   const writes = () => page.evaluate(() => window.__nfc.writes.length);
@@ -242,17 +248,30 @@ async function writeOver({ page, assert }) {
   await page.waitForFunction(() => /^Nothing written/.test(document.querySelector('#test-panel .nfc > .msg:last-child').textContent));
   assert.deepEqual(await said(), ['msg ', 'Nothing written. The sticker keeps its old link.']);
   assert.equal(await writes(), n + 1, 'written over a tote\'s sticker without asking');
-  // and written over when asked
+  // asked, and then another sticker held to the phone (the tote's left it while the question was up): read, and not
+  // written over, since it isn't the one the question named
   await press({ url: 'https://tag.junkdrawer.works/t/02' }, 'https://tag.junkdrawer.works/t/02');
   await ask.waitFor();
   await ask.locator('button[type=submit]').click();
+  await listening();
+  assert.deepEqual(await said(), ['msg wait', 'Hold the sticker flat against the back of the phone, near the top, and keep it still.']);
+  await page.evaluate(() => { window.__nfc.sticker = { url: 'https://tag.junkdrawer.works/t/03' }; window.__nfc.tap('https://tag.junkdrawer.works/t/03', '04:a2:19:7c:5e:11:91'); });
+  await page.waitForFunction(() => /^That's a different sticker/.test(document.querySelector('#test-panel .nfc > .msg:last-child').textContent));
+  assert.deepEqual(await said(), ['msg bad', 'That\'s a different sticker from the one you said to write over. Nothing written.']);
+  assert.equal(await writes(), n + 1, 'wrote over a sticker nobody was asked about');
+  // and written over when asked, once the same sticker is held to the phone again
+  await press({ url: 'https://tag.junkdrawer.works/t/02' }, 'https://tag.junkdrawer.works/t/02');
+  await ask.waitFor();
+  await ask.locator('button[type=submit]').click();
+  await listening();
+  assert.equal(await page.evaluate(() => window.__nfc.tap('https://tag.junkdrawer.works/t/02')), true);
   await page.waitForFunction(w => window.__nfc.writes.length > w, n + 1);
   assert.deepEqual(await said(), ['msg ok', 'Written. Tap it with the phone to check it opens this page.']);
   // something that isn't a link
-  await page.evaluate(() => { window.__nfc.sticker = { refuse: true }; });
+  await page.evaluate(() => { window.__nfc.sticker = { refuse: true }; window.__nfc.held = true; });
   await page.click('#test-panel >> text=Write test sticker');
-  await page.waitForFunction(() => window.__nfc.readers.some(r => r.listening));
-  await page.evaluate(() => { const r = window.__nfc.readers.filter(x => x.listening).at(-1);
+  await listening();
+  await page.evaluate(() => { const r = window.__nfc.readers.filter(x => x.listening).at(-1); window.__nfc.held = true;
     r.onreading({ serialNumber: '04', message: { records: [{ recordType: 'text', data: new TextEncoder().encode('Hello') }] } }); });
   await ask.waitFor();
   assert.match(await ask.locator('form > p').textContent(), /^It already holds something that isn't a link\. /);
@@ -262,16 +281,18 @@ async function writeOver({ page, assert }) {
   await page.waitForFunction(w => window.__nfc.writes.length > w, n + 2);
   assert.equal(await page.locator('dialog[open]').count(), 0, 'asked before writing a blank sticker');
   assert.deepEqual(await said(), ['msg ok', 'Written. Tap it with the phone to check it opens this page.']);
-  // a locked sticker: asked, then it says it's locked
+  // a locked sticker: asked, and the write over fails as an IO error, which says it moved away or is locked
   await press({ url: 'https://tag.junkdrawer.works/h/water-heater', locked: true }, 'https://tag.junkdrawer.works/h/water-heater');
   await ask.waitFor();
   assert.match(await ask.locator('form > p').textContent(), /^It already opens Placard's water-heater page\. /);
   await ask.locator('button[type=submit]').click();
+  await listening();
+  assert.equal(await page.evaluate(() => window.__nfc.tap('https://tag.junkdrawer.works/h/water-heater')), true);
   await page.waitForFunction(() => /locked/.test(document.querySelector('#test-panel .nfc > .msg:last-child').textContent));
-  assert.deepEqual(await said(), ['msg bad', 'That sticker is locked. Use a blank one.']);
+  assert.deepEqual(await said(), ['msg bad', 'Couldn\'t write it: the sticker moved away, or it\'s locked. Hold it still and press Write again; if this comes back, it\'s locked: use a blank one.']);
   assert.equal(await writes(), n + 3);
   assert.equal(await page.evaluate(() => window.__nfc.readers.some(r => r.listening)), false, 'still listening after the writes');
-  await page.evaluate(() => { window.__nfc.sticker = null; });
+  await page.evaluate(() => { window.__nfc.sticker = null; window.__nfc.held = true; });
 }
 
 // Another device: Switchboard's own connect link as a QR code, drawn only when asked (it carries the key), hidden again
