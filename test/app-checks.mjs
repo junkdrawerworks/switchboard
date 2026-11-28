@@ -147,7 +147,32 @@ async function checkATag({ page, base, assert }) {
   assert.equal(await text('#check-out .tape-cap'), 'f / Frostbite');
 }
 
+// Installed on Android, an app opens every address inside its scope in its own window. Switchboard's scope is its page
+// alone, so a sticker's address (/h/water-heater, on the same origin) opens the resolver in the browser as on any other
+// phone. Chrome reads the manifest without errors (a scope that doesn't hold start_url is ignored, with an error), it can
+// still be installed, and its id is what it was before (the old start_url, './'), so a copy already installed stays the
+// same app.
+async function manifestChecks({ page, base, assert }) {
+  await page.goto(base);
+  const cdp = await page.context().newCDPSession(page);
+  try {
+    const m = await cdp.send('Page.getAppManifest');
+    assert.deepEqual(m.errors, [], 'Chrome found errors in the manifest');
+    const scope = m.parsed?.scope ?? new URL(JSON.parse(m.data).scope, m.url).href;
+    assert.ok(scope.endsWith('/index.html'), `the installed app's scope is ${scope}, which holds every sticker's address`);
+    assert.equal((base + 'h/water-heater').startsWith(scope), false, `a sticker's address is inside the installed app's scope (${scope})`);
+    const json = JSON.parse(m.data), start = new URL(json.start_url, m.url);
+    assert.equal(start.href, base + 'index.html');
+    assert.deepEqual((await cdp.send('Page.getInstallabilityErrors')).installabilityErrors, [], 'Switchboard can no longer be installed');
+    // the id: a relative one is read against start_url's origin, and none at all is start_url (MDN, Web app manifests,
+    // id). Before, it was start_url './', this address. (Chrome answers Page.getAppId only behind a flag.)
+    const id = (await cdp.send('Page.getAppId')).appId || (typeof json.id === 'string' ? new URL(json.id, start.origin).href : start.href);
+    assert.equal(id, base, 'the app\'s id changed, so a copy already installed would be another app');
+  } finally { await cdp.detach(); }
+}
+
 export async function appChecks({ page, ctx, base, assert, problems }) {
+  await manifestChecks({ page, base, assert });
   await resolverChecks({ browser: ctx.browser(), assert });
   await checkATag({ page, base, assert });
   // a toast takes the phone's width, so a sentence stays on one or two lines (left: 50% once squeezed it into half)
