@@ -31,12 +31,14 @@ export function slug(s, max = 32) {
     .replace(/&/g, ' and ').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, max).replace(/-+$/, '');
 }
 
-// A short random id (letters and digits, never starting with a dash): 5 characters gives 60 million choices.
+// A short random id (letters and digits, never starting with a dash): 5 characters gives 60 million choices. Never one
+// a Sheet would read as a number (all digits, or digits, e, digits: 234e56 is 2.34 x 10^58), which the ledger's first
+// version let it keep as one, so it listed back as another id: such an id's first character becomes a letter.
 export function newId(len = 5, rnd = Math.random) {
-  const abc = 'abcdefghjkmnpqrstuvwxyz23456789';
+  const abc = 'abcdefghjkmnpqrstuvwxyz23456789';   // 23 letters, then the digits
   let s = '';
   for (let i = 0; i < len; i++) s += abc[Math.floor(rnd() * abc.length)];
-  return s;
+  return /^\d+(e\d+)?$/.test(s) ? abc[Math.floor(rnd() * 23)] + s.slice(1) : s;
 }
 
 // A unique id from a name: the slug, or the slug with -2, -3 … when it's taken.

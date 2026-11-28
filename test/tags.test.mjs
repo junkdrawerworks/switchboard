@@ -24,6 +24,17 @@ test('slugs and ids', () => {
   assert.match(id, /^[a-z2-9]{5}$/);
 });
 
+test('a made-up id is never one a sheet would read as a number (all digits, or digits e digits)', () => {
+  const ABC = 'abcdefghjkmnpqrstuvwxyz23456789', at = c => (ABC.indexOf(c) + 0.5) / ABC.length, letter = c => (ABC.indexOf(c) + 0.5) / 23;
+  const seq = xs => { let i = 0; return () => xs[i++ % xs.length]; };
+  // '234e56' is 2.34 × 10^58 to a Sheet, and '23456' a number: such an id's first character becomes a letter
+  assert.equal(newId(6, seq([...[...'234e56'].map(at), letter('k')])), 'k34e56');
+  assert.equal(newId(5, seq([...[...'23456'].map(at), letter('p')])), 'p3456');
+  assert.equal(newId(5, () => at('7')), 'y7777');
+  assert.equal(newId(6, seq([...'2a4e56'].map(at))), '2a4e56', 'an id with another letter is left as it is');
+  for (let i = 0; i < 20000; i++) assert.doesNotMatch(newId(i % 2 ? 6 : 5), /^\d+(e\d+)?$/);
+});
+
 // 404.html's scripts (the one in its head, then the one at the end of its body) with a pretend page. overrides: lines
 // put into OVERRIDES, as the owner would.
 function runResolver(pathname, overrides = '') {
