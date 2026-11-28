@@ -69,7 +69,7 @@ function handle(q) {
       case 'ping': return { ok: true, version: VERSION, time: Date.now() };
       case 'list': return { ok: true, time: Date.now(), docs: list(checkName(name), Number(q.since) || 0, q.match || null) };
       case 'get': { const d = getDoc(checkName(name), String(q.id)); return { ok: true, doc: d }; }
-      case 'put': return locked(function () { return write({ op: 'put', app: q.app, coll: q.coll, id: q.id, doc: q.doc }); });
+      case 'put': return locked(function () { return write({ op: 'put', app: q.app, coll: q.coll, id: q.id, doc: q.doc, ifUpdated: q.ifUpdated }); });
       case 'del': return locked(function () { return write({ op: 'del', app: q.app, coll: q.coll, id: q.id }); });
       case 'add': return locked(function () { return write({ op: 'add', app: q.app, coll: q.coll, doc: q.doc }); });
       case 'batch':
@@ -179,7 +179,10 @@ function mend(s) {
 }
 
 // One write: put (replace the record), del (mark it deleted, keeping the record, so FALSE typed into its deleted cell
-// brings it back) or add (a new record, id made up if missing).
+// brings it back) or add (a new record, id made up if missing). A put with ifUpdated is made only on the version of
+// the record it names (its updated time) and only if it isn't deleted; otherwise it changes nothing and answers
+// skipped: Home Assistant's "added to the list" mark, so it never brings back an entry Larder took back after Home
+// Assistant read it. The same put made again (its answer lost on the way) counts as made and changes nothing.
 function write(o) {
   const name = checkName(String(o.app) + '.' + String(o.coll));
   let id = o.id != null ? String(o.id) : (o.doc && o.doc.id ? String(o.doc.id) : '');
@@ -206,7 +209,14 @@ function write(o) {
     if (at.length && String(Number(id)) !== id && cells.indexOf(String(Number(id))) < 0) old = String(Number(id));
   }
   // the record as the sheet has it now: the row changed last
-  const cur = at.length && o.op === 'del' ? newest(at.map(function (i) { return s.getRange(i + 2, 1, 1, 4).getValues()[0]; }))[0] : null;
+  const named = o.op === 'put' && o.ifUpdated != null;
+  const cur = at.length && (o.op === 'del' || named) ? newest(at.map(function (i) { return s.getRange(i + 2, 1, 1, 4).getValues()[0]; }))[0] : null;
+  if (named) {
+    const live = !!cur && cur[2] !== true && cur[2] !== 'TRUE';
+    if (!live || (Number(cur[1]) || 0) !== Number(o.ifUpdated)) {
+      return live && String(cur[3]) === json ? { ok: true, id: id, updated: Number(cur[1]) || 0 } : { ok: true, id: id, skipped: true };
+    }
+  }
   if (o.op === 'del') json = cur && cur[3] !== '' ? String(cur[3]) : '';
   const row = [id, now, o.op === 'del', json];
   at.forEach(function (i) { asText(s, i + 2); s.getRange(i + 2, 1, 1, 4).setValues([row]); });

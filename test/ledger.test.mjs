@@ -975,6 +975,44 @@ test('a deleted record keeps its json, every reader leaves it out, and FALSE in 
   assert.deepEqual(get(g, { op: 'pub', app: 'placard', coll: 'site' }).docs.map(d => d.id).sort(), ['house', 'well-pump']);
 });
 
+test('a put naming the version it is for (ifUpdated) is made only on that version: Home Assistant\'s mark never brings back a taken-back entry', () => {
+  const { g, props, sheets } = fakeGoogle();
+  g.setup();
+  ticking(g);
+  const key = props.KEY, q = sheets => sheets['larder.queue'].data.slice(1);
+  const put = (id, doc, ifUpdated) => post(g, { key, op: 'batch', ops: [{ op: 'put', app: 'larder', coll: 'queue', id, doc, ...(ifUpdated !== undefined ? { ifUpdated } : {}) }] }).results[0];
+  for (const [id, text] of [['q1', 'Rice'], ['q2', 'Oats'], ['q3', 'Flour']]) post(g, { key, op: 'put', app: 'larder', coll: 'queue', id, doc: { item: text.toLowerCase(), text, synced: false } });
+  const read = Object.fromEntries(post(g, { key, op: 'list', app: 'larder', coll: 'queue', since: 0, match: { synced: false } }).docs.map(d => [d.id, d]));
+  // Home Assistant read q1-q3; then Restocked took q1 back, and Larder renamed q2
+  post(g, { key, op: 'del', app: 'larder', coll: 'queue', id: 'q1' });
+  post(g, { key, op: 'put', app: 'larder', coll: 'queue', id: 'q2', doc: { item: 'oats', text: 'Rolled oats', synced: false } });
+  const mark = d => ({ op: 'put', app: 'larder', coll: 'queue', id: d.id, doc: { ...d, synced: true }, ifUpdated: d._updated });
+  const ops = ['q1', 'q2', 'q3'].map(id => mark(read[id]));
+  const r = post(g, { key, op: 'batch', ops }).results;
+  assert.deepEqual(r.map(x => [x.id, !!x.skipped]), [['q1', true], ['q2', true], ['q3', false]]);
+  const rows = Object.fromEntries(q(sheets).map(x => [x[0], x]));
+  assert.equal(rows.q1[2], true, 'the mark brought back the entry Restocked deleted');
+  assert.equal(JSON.parse(rows.q2[3]).text, 'Rolled oats', 'the mark wrote over the rename');
+  assert.equal(JSON.parse(rows.q2[3]).synced, false);
+  assert.equal(JSON.parse(rows.q3[3]).synced, true);
+  // the same mark again (its answer lost on the way): counts as made, and changes nothing
+  const stamp = rows.q3[1];
+  assert.deepEqual(post(g, { key, op: 'batch', ops }).results.map(x => [x.id, !!x.skipped]), [['q1', true], ['q2', true], ['q3', false]]);
+  assert.equal(q(sheets).find(x => x[0] === 'q3')[1], stamp, 'the mark made again stamped the row');
+  // the next read: the renamed q2 is marked from its new version
+  const q2 = post(g, { key, op: 'get', app: 'larder', coll: 'queue', id: 'q2' }).doc;
+  assert.equal(put('q2', { ...q2, synced: true }, q2._updated).skipped, undefined);
+  // a row deleted by hand, or never there: skipped; FALSE typed in a deleted cell, then the version read: made
+  assert.equal(put('nope', { text: 'x', synced: true }, 5).skipped, true);
+  assert.equal(sheets['larder.queue'].data.some(x => x[0] === 'nope'), false, 'a skipped put made a row');
+  // a put that names no version, as every app sends: as before, whatever the row holds
+  assert.equal(put('q1', { item: 'rice', text: 'Rice', synced: false }).skipped, undefined);
+  assert.equal(q(sheets).find(x => x[0] === 'q1')[2], false);
+  // as one op on its own, too
+  const one = post(g, { key, op: 'put', app: 'larder', coll: 'queue', id: 'q3', doc: { text: 'Flour', synced: true }, ifUpdated: 1 });
+  assert.deepEqual([one.ok, one.skipped], [true, true]);
+});
+
 test('an add sent twice with the same id (a retry) keeps one row and does not undo later changes', { todo: 'add with an id overwrites; Pinch and Cellmate send no id' }, async () => {
   const { g, props, sheets } = await world();
   const add = () => post(g, { key: props.KEY, op: 'add', app: 'larder', coll: 'queue', doc: { id: 'pinch-cumin-2026-09-01', item: 'cumin', synced: false } });
