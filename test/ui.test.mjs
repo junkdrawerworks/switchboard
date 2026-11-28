@@ -245,3 +245,61 @@ test('a confirm that deletes, locks or clears for good has the red button; any o
   p.button('Cancel').dispatchEvent(new Event('click'));
   assert.equal(await plain, false);
 });
+
+test('a long edit sheet keeps what was typed for this tab through a reload, until Save, Cancel or Discard', async () => {
+  const store = {};
+  globalThis.sessionStorage = { getItem: k => store[k] ?? null, setItem: (k, v) => { store[k] = String(v); }, removeItem: k => { delete store[k]; } };
+  try {
+    const { sheet, RESTORED } = await import('../js/kit/ui.js');
+    const page = () => [{ name: 'name', label: 'Name', value: 'Water heater' }, { name: 'steps', label: 'What to do', type: 'textarea', value: 'Turn the dial' }];
+    const typed = (p, name, v) => { p.field(name).value = v; p.dialog().find(n => n.tagName === 'FORM').dispatchEvent(new Event('input')); };
+    const note = p => p.dialog().find(n => /draft-note/.test(n.className));
+    let p = fakePage();
+    sheet({ title: 'Edit Water heater', fields: page(), draft: 'page:water-heater' });
+    assert.equal(note(p), undefined, 'a sheet with nothing typed before says it restored something');
+    assert.deepEqual(Object.keys(store), [], 'kept before anything was typed');
+    typed(p, 'steps', 'Turn the dial to Vacation\nCall the plumber');
+    assert.deepEqual(JSON.parse(store['sheet-draft:page:water-heater']), { name: 'Water heater', steps: 'Turn the dial to Vacation\nCall the plumber' });
+    // the tab reloads with the sheet open (the page goes; the sheet never closed): opened again, it's all back, and says so
+    p = fakePage();
+    let done = sheet({ title: 'Edit Water heater', fields: page(), draft: 'page:water-heater' });
+    assert.equal(p.field('steps').value, 'Turn the dial to Vacation\nCall the plumber', 'what was typed went with the reload');
+    assert.equal(p.field('name').value, 'Water heater');
+    assert.equal(note(p).find(n => n.tagName === 'P').textContent, RESTORED);
+    assert.equal(note(p).getAttribute('role'), 'status');
+    // a sheet under another name, or with none, doesn't get it
+    const other = fakePage();
+    sheet({ title: 'Edit Furnace', fields: page(), draft: 'page:furnace' });
+    assert.equal(other.field('steps').value, 'Turn the dial');
+    other.button('Cancel').dispatchEvent(new Event('click'));
+    // Save clears it
+    p.submit(); await later();
+    assert.deepEqual(await done, { name: 'Water heater', steps: 'Turn the dial to Vacation\nCall the plumber' });
+    assert.deepEqual(Object.keys(store), [], 'Save left the draft');
+    // Cancel clears it too
+    p = fakePage();
+    done = sheet({ title: 'Edit Water heater', fields: page(), draft: 'page:water-heater' });
+    typed(p, 'name', 'Water heater, basement');
+    assert.ok(store['sheet-draft:page:water-heater']);
+    const form = p.dialog().find(n => n.tagName === 'FORM');
+    p.button('Cancel').dispatchEvent(new Event('click'));
+    assert.equal(await done, null);
+    assert.deepEqual(Object.keys(store), [], 'Cancel left the draft');
+    form.dispatchEvent(new Event('change'));   // the field losing the focus as the sheet goes
+    assert.deepEqual(Object.keys(store), [], 'a change fired as the sheet closed was kept again');
+    // Discard puts back what the record holds, and forgets what was typed; typed back to as it was, nothing is kept
+    p = fakePage();
+    sheet({ title: 'Edit Water heater', fields: page(), draft: 'page:water-heater' });
+    typed(p, 'steps', 'Half a sentence');
+    p = fakePage();
+    sheet({ title: 'Edit Water heater', fields: page(), draft: 'page:water-heater' });
+    assert.equal(p.field('steps').value, 'Half a sentence');
+    note(p).find(n => n.tagName === 'BUTTON' && n.textContent === 'Discard').dispatchEvent(new Event('click'));
+    assert.equal(p.field('steps').value, 'Turn the dial');
+    assert.equal(note(p), undefined, 'the line stayed after Discard');
+    assert.deepEqual(Object.keys(store), []);
+    typed(p, 'steps', 'Turn the dial ');
+    typed(p, 'steps', 'Turn the dial');
+    assert.deepEqual(Object.keys(store), [], 'kept with nothing changed from the record');
+  } finally { delete globalThis.sessionStorage; }
+});

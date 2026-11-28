@@ -43,16 +43,30 @@ export function toast(text, kind = '') {
 // On a touch screen the title takes the focus when it opens, so the on-screen keyboard waits for a tap on a field
 // instead of covering half the sheet at once; autofocus: true (where typing is the whole job) gives the first field
 // the focus anyway. With a mouse and keyboard the first field has it. The title names the sheet for a screen reader.
+// draft: a name for a long edit sheet ('page:water-heater', 'jar:new'). What's typed in it is kept for this tab as it's
+// typed (sessionStorage, which a reload keeps: Android reloads a tab left in the background for a call or another
+// app), and the sheet opened again under that name fills it back in and says "Restored what you were typing.", with
+// Discard for what the record holds. Save, Cancel, Delete or closing the sheet any other way clears it.
 let sheets = 0;
+const DRAFT = 'sheet-draft:';
+export const draftOf = name => { try { return JSON.parse(sessionStorage.getItem(DRAFT + name) || 'null'); } catch { return null; } };
+const keepDraft = (name, v) => { try { if (v) sessionStorage.setItem(DRAFT + name, JSON.stringify(v)); else sessionStorage.removeItem(DRAFT + name); } catch {} };
+export const RESTORED = 'Restored what you were typing.';
 export const CHECK_FAILED = 'Not saved: something went wrong. Try again.';
 // okDanger: the submit button is the red one (a confirm that deletes, locks or clears for good). cancel: null for a
 // question with two answers and no Cancel (other and ok are the answers; Escape still closes it, as null).
-export function sheet({ title, fields = [], body = null, ok = 'Save', danger = null, other = null, check = null, autofocus = false, okDanger = false, cancel = 'Cancel' }) {
+export function sheet({ title, fields = [], body = null, ok = 'Save', danger = null, other = null, check = null, autofocus = false, okDanger = false, cancel = 'Cancel', draft = null }) {
   return new Promise(resolve => {
     const head = h('h2', { id: `sheet-${++sheets}-title` }, title);
     const dlg = h('dialog', { class: 'sheet', 'aria-labelledby': head.id });
     const form = h('form', { method: 'dialog' });
     const inputs = {};
+    const slot = draft ? h('div', { class: 'draft-slot' }) : null;   // "Restored what you were typing." goes here
+    if (slot) form.append(slot);
+    // closed by any answer: what was typed is forgotten at once (not when the dialog's close event comes, which a reload
+    // straight after can beat), and a change the closing fires (the field losing the focus) isn't kept again
+    let closed = false;
+    const done = () => { closed = true; if (draft) keepDraft(draft, null); };
     for (const f of fields) {
       let input;
       const id = 'f-' + f.name;
@@ -66,12 +80,38 @@ export function sheet({ title, fields = [], body = null, ok = 'Save', danger = n
       form.append(h('label', { class: 'field', for: id }, h('span', {}, f.label), input, f.hint ? h('small', {}, f.hint) : null));
     }
     if (body) form.append(body);
+    if (draft) {
+      // what the record holds, then what was typed for it in this tab before (a field it no longer has, or a choice no
+      // longer offered, is left as the record has it)
+      const was = Object.fromEntries(Object.entries(inputs).map(([k, el]) => [k, el.value]));
+      const fits = (el, v) => el.tagName !== 'SELECT' || !el.options || [...el.options].some(o => o.value === v);
+      const typed = draftOf(draft) || {}, back = Object.keys(typed).filter(k => inputs[k] && typeof typed[k] === 'string' && typed[k] !== was[k] && fits(inputs[k], typed[k]));
+      const keep = () => {
+        if (closed) return;
+        const now = Object.fromEntries(Object.entries(inputs).map(([k, el]) => [k, el.value]));
+        keepDraft(draft, Object.keys(now).some(k => now[k] !== was[k]) ? now : null);
+      };
+      if (back.length) {
+        for (const k of back) inputs[k].value = typed[k];
+        slot.append(h('div', { class: 'notice draft-note', role: 'status' }, h('p', {}, RESTORED),
+          h('button', { type: 'button', class: 'btn ghost', onclick: () => {
+            for (const [k, el] of Object.entries(inputs)) if (el.value !== was[k]) {
+              el.value = was[k];
+              el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true }));
+            }
+            keepDraft(draft, null); slot.replaceChildren();
+          } }, 'Discard')));
+      }
+      keep();
+      form.addEventListener('input', keep); form.addEventListener('change', keep);
+      dlg.addEventListener('close', done);
+    }
     const said = h('p', { class: 'msg bad sheet-msg', 'aria-live': 'polite' });
     const bar = h('div', { class: 'sheet-bar' }, said,
-      danger ? h('button', { type: 'button', class: 'btn danger ghost', onclick: () => { dlg.close(); resolve({ __danger: true }); } }, danger) : null,
-      other ? h('button', { type: 'button', class: 'btn ghost', onclick: () => { dlg.close(); resolve({ __other: true }); } }, other) : null,
+      danger ? h('button', { type: 'button', class: 'btn danger ghost', onclick: () => { done(); dlg.close(); resolve({ __danger: true }); } }, danger) : null,
+      other ? h('button', { type: 'button', class: 'btn ghost', onclick: () => { done(); dlg.close(); resolve({ __other: true }); } }, other) : null,
       h('span', { class: 'grow' }),
-      cancel ? h('button', { type: 'button', class: 'btn ghost', onclick: () => { dlg.close(); resolve(null); } }, cancel) : null,
+      cancel ? h('button', { type: 'button', class: 'btn ghost', onclick: () => { done(); dlg.close(); resolve(null); } }, cancel) : null,
       h('button', { type: 'submit', class: okDanger ? 'btn danger' : 'btn' }, ok));
     form.append(bar);
     let checking = false;
@@ -91,7 +131,7 @@ export function sheet({ title, fields = [], body = null, ok = 'Save', danger = n
         said.textContent = line;
         if (line || field) { inputs[field]?.focus(); return; }
       }
-      dlg.close(); resolve(out);
+      done(); dlg.close(); resolve(out);
     });
     // The field with the focus, in full between the title and the Save bar: when it takes the focus (Chrome shows only
     // a textarea's caret line) and again when the page shrinks above the on-screen keyboard; one taller than the room
@@ -105,7 +145,7 @@ export function sheet({ title, fields = [], body = null, ok = 'Save', danger = n
     };
     dlg.addEventListener('focusin', keep);
     addEventListener('resize', keep);
-    dlg.addEventListener('cancel', () => resolve(null));
+    dlg.addEventListener('cancel', () => { done(); resolve(null); });
     dlg.addEventListener('close', () => { removeEventListener('resize', keep); setTimeout(() => dlg.remove(), 50); });
     const first = Object.values(inputs)[0];
     if (matchMedia('(pointer: coarse)').matches && !(autofocus && first)) { head.setAttribute('tabindex', '-1'); head.setAttribute('autofocus', ''); }

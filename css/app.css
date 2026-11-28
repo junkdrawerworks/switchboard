@@ -27,3 +27,5 @@
 #find-list .empty { padding: 4px 0; text-align: left; }
 /* Check a tag, connected: what the sticker is for, under its tape */
 #check-out .named { margin: 10px 0 6px; overflow-wrap: anywhere; }
+/* The privacy page: one screen of plain words. */
+.privacy .crumb { margin-top: 0; } .privacy .lead { font-size: 19px; } .privacy h2 { margin-top: 22px; }

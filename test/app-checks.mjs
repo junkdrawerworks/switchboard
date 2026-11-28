@@ -546,7 +546,37 @@ async function manifestChecks({ page, base, assert }) {
   } finally { await cdp.detach(); }
 }
 
+// The tag apps' privacy page (every app's footer links to it): one screen on a phone, light and dark, at 390 and 1280
+// px; what goes to the Google Sheet, that the house manual is public, and what a tenant's report sends and to whom.
+async function privacyChecks({ browser, base, assert }) {
+  for (const [width, dark] of [[390, false], [390, true], [1280, false], [1280, true]]) {
+    const ctx = await browser.newContext({ viewport: { width, height: 844 }, deviceScaleFactor: 2, isMobile: width < 600, hasTouch: width < 600, colorScheme: dark ? 'dark' : 'light', serviceWorkers: 'block' });
+    try {
+      const p = await ctx.newPage(), errors = [];
+      p.on('pageerror', e => errors.push(e.message));
+      p.on('requestfailed', r => errors.push('failed: ' + r.url()));
+      await p.goto(base + 'privacy.html');
+      await p.evaluate(() => document.fonts.ready);
+      const at = `${width} px ${dark ? 'dark' : 'light'}`;
+      assert.equal(await p.title(), 'Privacy · Switchboard');
+      assert.deepEqual(await p.locator('h2').evaluateAll(hs => hs.map(h => h.id)), ['sheet', 'manual', 'reports', 'else']);
+      assert.equal(await p.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, `${at}: the privacy page scrolls sideways`);
+      const text = await p.locator('main').innerText();
+      for (const said of [/no accounts, no analytics and no cookies/, /Google Sheet in your own Google account/, /can read every page of the manual, with no key/,
+        /door codes and passwords stay off it/, /their name and phone or email if they give them/, /emailed, from the owner's Google account, to the address in the sheet's About tab/,
+        /Reply goes to the tenant's email/, /treat them like a password/])
+        assert.match(text, said, `${at}: the privacy page doesn't say ${said}`);
+      assert.equal(await p.locator('.crumb a').getAttribute('href'), './');
+      const bg = await p.evaluate(() => [getComputedStyle(document.body).backgroundColor, getComputedStyle(document.body).color]);
+      const { contrast } = await import('./kit-checks.mjs');
+      assert.ok(contrast(...bg) >= 7, `${at}: the page's words are ${contrast(...bg).toFixed(2)}:1`);
+      assert.deepEqual(errors, [], `${at}: the privacy page`);
+    } finally { await ctx.close(); }
+  }
+}
+
 export async function appChecks({ page, ctx, base, assert, problems }) {
+  await privacyChecks({ browser: ctx.browser(), base, assert });
   await manifestChecks({ page, base, assert });
   await resolverChecks({ browser: ctx.browser(), assert });
   await lookChecks({ browser: ctx.browser(), base, assert });

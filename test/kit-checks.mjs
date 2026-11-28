@@ -1,5 +1,5 @@
 // The house kit's own checks, run by test/e2e.mjs in every tag app (copied from the build folder's common/kit by
-// scaffold.py): the keyboard focus ring and the red toast can be seen, light and dark, a toast is announced and stays
+// scaffold.py): the keyboard focus ring, the red toast, the app's button and the ok chip can be seen, light and dark, a toast is announced and stays
 // long enough to read, the sample's Leave the sample is a target a thumb can't miss, and the page shrinks above the
 // on-screen keyboard. fieldsUnderBar, backKeepsPlace and targetsAudit are for the apps' own checks.
 // WCAG relative luminance and contrast ratio of two computed colours ('rgb(…)' or 'rgba(…)').
@@ -89,6 +89,40 @@ export async function targetsAudit({ browser, base, assert, hashes, skip = '' })
   } finally { await ctx.close(); }
 }
 
+// A long edit sheet keeps what was typed through a reload of the tab (Android reloads a tab left in the background for
+// a call or another app): opened again, it's back with "Restored what you were typing." and Discard, which puts back
+// what the record holds; after Cancel or Save a reload brings nothing back. On the sample: path is the page, open the
+// clicks that open the sheet, field the id of one of its fields.
+export async function draftChecks({ browser, base, assert, path, open, field, typed = 'Half a sentence, typed before a call' }) {
+  const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true, serviceWorkers: 'block' });
+  try {
+    const page = await ctx.newPage(), input = `dialog[open] #${field}`, note = () => page.locator('dialog[open] .draft-note');
+    const sheet = async () => { for (const s of open) await page.click(s); await page.waitForSelector(input); };
+    await page.goto(base + '?demo' + path);
+    await sheet();
+    const was = await page.inputValue(input);
+    assert.equal(await note().count(), 0, `${path}: "restored" with nothing typed before`);
+    await page.fill(input, typed);
+    await page.reload();
+    await sheet();
+    assert.equal(await page.inputValue(input), typed, `${path}: what was typed in #${field} went with the reload`);
+    assert.equal(await note().locator('p').textContent(), 'Restored what you were typing.');
+    await note().locator('button', { hasText: 'Discard' }).click();
+    assert.deepEqual([await page.inputValue(input), await note().count()], [was, 0], `${path}: Discard didn't put back what the record holds`);
+    await page.fill(input, typed);
+    await page.click('dialog[open] >> text=Cancel');
+    await page.reload();
+    await sheet();
+    assert.deepEqual([await page.inputValue(input), await note().count()], [was, 0], `${path}: Cancel left what was typed to come back`);
+    await page.fill(input, typed);
+    await page.click('dialog[open] button[type=submit]');
+    await page.waitForFunction(() => !document.querySelector('dialog[open]'));
+    await page.reload();
+    await sheet();
+    assert.equal(await note().count(), 0, `${path}: Save left what was typed to come back`);
+  } finally { await ctx.close(); }
+}
+
 // A sheet's buttons on a 320 px phone wrap (Larder's "Ounces or grams?": Keep 88 oz, Cancel, Use 88 g): 8 px between
 // rows as between buttons, so the main one isn't flush under the one above it; an empty line above them takes no room,
 // and a refused Save's line sits 8 px above them. At 390 px the same three fit on one row.
@@ -169,6 +203,15 @@ export async function kitChecks({ browser, base, assert }) {
         const s = getComputedStyle(b), out = { color: s.color, bg: s.backgroundColor }; b.remove(); return out; });
       const rr = contrast(red.color, red.bg);
       assert.ok(rr >= 4.5, `${scheme}: the red Delete button is ${rr.toFixed(2)}:1 (${red.color} on ${red.bg}); it needs 4.5:1`);
+      // the app's own button (Save, Add, Lend) and the green ok chip: their words against their colour, 4.5:1 for text
+      // their size (Frostbite's blue and Packrat's teal were 4.28 and 4.19, the ok chip 4.43)
+      const words = await page.evaluate(() => [['the app\'s button', 'button', 'btn', 'Save'], ['the ok chip', 'span', 'chip ok', 'ok']].map(([what, tag, cls, text]) => {
+        const el = document.createElement(tag); el.className = cls; el.textContent = text; document.body.append(el);
+        const s = getComputedStyle(el), out = { what, color: s.color, bg: s.backgroundColor }; el.remove(); return out; }));
+      for (const w of words) {
+        const r = contrast(w.color, w.bg);
+        assert.ok(r >= 4.5, `${scheme}: ${w.what}'s words are ${r.toFixed(2)}:1 (${w.color} on ${w.bg}); they need 4.5:1`);
+      }
       if (!dark) {
         // the page shrinks above the on-screen keyboard (Chrome on Android otherwise lays it over the sheet's Save bar)
         assert.match(await page.evaluate(() => document.querySelector('meta[name=viewport]')?.content || ''), /interactive-widget=resizes-content/,
@@ -183,6 +226,10 @@ export async function kitChecks({ browser, base, assert }) {
         await page.waitForTimeout(2300);
         assert.equal(await page.locator('#toast.show').count(), 1, 'a short toast went before 2.6 s');
         await sheetBarChecks(page, assert);
+        // the footer's Privacy link: the tag apps' own page on Switchboard's site, which says what goes to the Google
+        // Sheet and what a house manual report sends (the junk drawer's says nothing leaves the browser)
+        const privacy = await page.evaluate(() => [...document.querySelectorAll('.jd-foot a')].find(a => a.textContent === 'Privacy')?.href);
+        assert.ok(['https://tag.junkdrawer.works/privacy.html', new URL('privacy.html', base).href].includes(privacy), `the footer's Privacy link goes to ${privacy}`);
       }
       // the sample's way out (in every app that has a sample): at least 44 px tall
       if (await page.evaluate(() => fetch('js/app.js').then(r => r.text()).then(t => t.includes('sampleLink')))) {
