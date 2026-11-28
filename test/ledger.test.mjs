@@ -370,7 +370,7 @@ test('the same report from the same page twice in an hour is kept once more but 
   const send = (text, system = 'water-heater') => post(g, { op: 'report', app: 'placard', coll: 'reports', doc: { system, text, kind: 'Problem' } });
   assert.deepEqual(send('No hot water since this morning'), { ok: true, emailed: true });
   t += 20 * 60000;
-  assert.deepEqual(send('  no hot water   since this morning '), { ok: true, emailed: false, repeat: true, firstAt: '2026-11-27T07:19:00.000Z' });
+  assert.deepEqual(send('  no hot water   since this morning '), { ok: true, emailed: false, repeat: true, firstAt: '2026-11-27T07:19:00.000Z', firstEmailed: true });
   assert.equal(mail.length, 1, 'the same report was emailed twice');
   // another page, other words, or after the hour: emailed
   assert.equal(send('No hot water since this morning', 'well-pump').emailed, true);
@@ -380,6 +380,43 @@ test('the same report from the same page twice in an hour is kept once more but 
   assert.equal(mail.length, 4);
   const kept = post(g, { key, op: 'list', app: 'placard', coll: 'reports', since: 0 }).docs;
   assert.deepEqual(kept.map(r => !!r.repeat), [false, true, false, false, false], 'every report is kept, the repeat marked');
+});
+
+test('a repeat of a report that was only kept, never emailed, says so, so the page can tell the tenant to call', () => {
+  const { g, props, mail } = fakeGoogle();
+  g.setup();
+  const RealDate = Date;
+  let t = RealDate.UTC(2026, 10, 27, 7, 19);
+  g.Date = class extends RealDate { constructor(...a) { super(...(a.length ? a : [t])); } static now() { return t; } };
+  const later = () => { t += 5 * 60000; };
+  const send = text => post(g, { op: 'report', app: 'placard', coll: 'reports', doc: { system: 'water-heater', text, kind: 'Problem' } });
+  // Google has nothing left today: the first is kept, not emailed, and the second says so
+  mail.quota = 0;
+  assert.deepEqual(send('No hot water'), { ok: true, emailed: false });
+  mail.quota = 100; later();
+  assert.deepEqual(send('No hot water'), { ok: true, emailed: false, repeat: true, firstAt: '2026-11-27T07:19:00.000Z', firstEmailed: false });
+  // Google turned the send itself down: the same
+  mail.refuse = true;
+  assert.deepEqual(send('The tank drips'), { ok: true, emailed: false });
+  mail.refuse = false; later();
+  assert.equal(send('The tank drips').firstEmailed, false, 'a send Google turned down counted as emailed');
+  // today's 20 emails used up: the same
+  props.MAILED = '2026-11-27 20';
+  assert.equal(send('Breaker 21 tripped').emailed, false);
+  later();
+  assert.equal(send('Breaker 21 tripped').firstEmailed, false, 'a report over the day\'s cap counted as emailed');
+  // emailed: the repeat says so
+  props.MAILED = '';
+  assert.equal(send('The pan is wet').emailed, true); later();
+  assert.equal(send('The pan is wet').firstEmailed, true);
+  assert.equal(mail.length, 1);
+  // a report kept before reports said either way was emailed if it could be
+  post(g, { key: props.KEY, op: 'add', app: 'placard', coll: 'reports', doc: { system: 'water-heater', text: 'Odd smell', kind: 'Problem', at: new RealDate(t).toISOString(), status: 'new' } });
+  later();
+  assert.equal(send('Odd smell').firstEmailed, true);
+  const kept = post(g, { key: props.KEY, op: 'list', app: 'placard', coll: 'reports', since: 0 }).docs;
+  assert.deepEqual(kept.filter(r => !r.repeat).map(r => [r.text, r.emailed]),
+    [['No hot water', false], ['The tank drips', false], ['Breaker 21 tripped', false], ['The pan is wet', true], ['Odd smell', undefined]], 'what each kept report says about its email');
 });
 
 test('a report says whether the email went: at most 20 a day, never past Google\'s quota, and kept either way', () => {

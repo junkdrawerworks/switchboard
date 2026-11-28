@@ -296,7 +296,9 @@ function sendAgain() {
 // counts towards the hour (not an empty one, nor the hidden field only robots fill in). The answer says whether the
 // email went (emailed: false when today's share is used up or Google refused it), so the page can say "call". The
 // same words from the same page as one in the last hour are kept, marked repeat, but not emailed again: the answer
-// says when the first went (firstAt), for a tenant who sent it again thinking it hadn't gone.
+// says when the first went (firstAt), for a tenant who sent it again thinking it hadn't gone, and whether that one was
+// emailed (firstEmailed), so a tenant whose first was only saved is told to call. Each report keeps emailed: true or
+// false (one kept before this has none: it was emailed if it could be).
 function report(name, doc) {
   const max = PUBLIC_REPORT[name];
   if (!max) return { ok: false, error: 'not public' };
@@ -316,24 +318,32 @@ function report(name, doc) {
   clean.systemName = pageName(name, clean.system);
   const day = clean.at.slice(0, 10);
   const props = PropertiesService.getScriptProperties();
-  let mailOk = false, first = '';
-  // Counted, kept and given today's email slot under the lock, so two at once can't both take the last one.
+  const app = name.split('.')[0], coll = name.split('.')[1];
+  let mailOk = false, first = null, to = '', id = '';
+  // Counted, kept and given today's email slot under the lock, so two at once can't both take the last one. Whether it
+  // will be emailed is known here (a slot, an address in B3, Google's quota), and kept with it.
   const saved = locked(function () {
     if (full()) return false;
     cache.put(hour, String(Number(cache.get(hour) || 0) + 1), 3600);
     first = sentAt(name, clean);
     if (first) clean.repeat = true;
-    write({ op: 'add', app: name.split('.')[0], coll: name.split('.')[1], doc: clean });
     const was = String(props.getProperty('MAILED') || '').split(' '), mailed = was[0] === day ? Number(was[1]) || 0 : 0;
-    if (!first && mailed < MAIL_PER_DAY) { mailOk = true; props.setProperty('MAILED', day + ' ' + (mailed + 1)); }
+    if (!first && mailed < MAIL_PER_DAY) {
+      props.setProperty('MAILED', day + ' ' + (mailed + 1));
+      try {   // no address in B3, Google's quota gone, or the email permission never given: kept, not emailed
+        to = String(SpreadsheetApp.getActive().getSheetByName('About').getRange('B3').getValue() || '');
+        mailOk = !!to && MailApp.getRemainingDailyQuota() > 0;
+      } catch (e) { mailOk = false; }
+    }
+    clean.emailed = mailOk;
+    id = write({ op: 'add', app: app, coll: coll, doc: clean }).id;
     return true;
   });
   if (!saved) return { ok: false, error: TOO_MANY };
-  if (first) return { ok: true, emailed: false, repeat: true, firstAt: first };
+  if (first) return { ok: true, emailed: false, repeat: true, firstAt: first.at, firstEmailed: first.emailed !== false };
   let emailed = false;
   try {
-    const to = SpreadsheetApp.getActive().getSheetByName('About').getRange('B3').getValue();
-    if (to && mailOk && MailApp.getRemainingDailyQuota() > 0) {
+    if (mailOk) {
       const kind = KINDS.indexOf(clean.kind) >= 0 ? clean.kind : 'note';
       // a sticker with no page says which sticker, if it's one a sticker can be
       const where = clean.systemName || (STICKER.test(clean.system || '') && FRONT.indexOf(clean.system) < 0
@@ -348,6 +358,11 @@ function report(name, doc) {
       emailed = true;
     }
   } catch (e) { /* the report is saved even if the email fails */ }
+  // Google turned the send down after all (rare: the quota checked above ran out meanwhile): the kept report says so
+  if (mailOk && !emailed) {
+    try { locked(function () { write({ op: 'put', app: app, coll: coll, id: id, doc: Object.assign({}, clean, { emailed: false }) }); }); }
+    catch (e) { /* the lock not had in 20 s: the report stands, saying emailed */ }
+  }
   return { ok: true, emailed: emailed };
 }
 const KINDS = ['Problem', 'Service visit', 'Question'];         // the report form's three
@@ -362,15 +377,15 @@ function pageName(name, id) {
   if (!d || d._deleted || d._bad) return '';
   return (typeof d.name === 'string' && d.name.trim() ? d.name.trim() : String(id)).slice(0, 120);
 }
-// When the same report (same page, same words, any capitals or spacing) was first sent in the last hour, or '': not
-// one marked repeat or handled since.
+// The same report (same page, same words, any capitals or spacing) first sent in the last hour ({ at, emailed }), or
+// null: not one marked repeat or handled since.
 function sentAt(name, clean) {
   const words = function (t) { return String(t || '').replace(/\s+/g, ' ').trim().toLowerCase(); };
   const since = Date.now() - 3600e3, text = words(clean.text), page = String(clean.system || '');
-  let first = '';
+  let first = null;
   list(name, 0, null).forEach(function (d) {
     if (d._deleted || d.repeat || d.status === 'handled' || String(d.system || '') !== page || words(d.text) !== text) return;
-    if (Date.parse(d.at) >= since && (!first || String(d.at) < first)) first = String(d.at);
+    if (Date.parse(d.at) >= since && (!first || String(d.at) < first.at)) first = { at: String(d.at), emailed: d.emailed };
   });
   return first;
 }
