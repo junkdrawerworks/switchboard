@@ -1722,3 +1722,124 @@ test('a body over 64 KiB is never sent with keepalive: the first writes that fit
     assert.ok(p.sends.filter(s => s.keepalive).every(s => s.bytes < 60000));
   } finally { p.restore(); }
 });
+
+// ---- Switchboard's Needs a look (js/look.js): each app's records read through the ledger with Switchboard's key, and
+// handed to the app's own attention file (here, stand-ins that say what they were given).
+const stand = (colls, say) => ({ COLLS: colls, look: say });
+const standIns = () => ({
+  f: stand(['items', 'zones'], read => read('items').map(i => ({ text: `Freezer: ${i.name} on ${read('zones').find(z => z.id === i.zone)?.name}`, href: '#' + i.zone }))),
+  m: stand(['packs'], read => read('packs').filter(p => p.weak).map(p => ({ text: `Packs: ${p.id} weak`, href: '#' + p.id }))),
+  h: stand(['reports'], read => read('reports').length ? [{ text: `Rental: ${read('reports').length} new report`, href: '#/reports' }] : []),
+  p: stand(['items'], read => read('items').length ? [{ text: `Larder: ${read('items').length} on the list`, href: './' }] : []),
+  t: stand(['totes'], () => []),
+});
+async function lookWorld({ mods = standIns(), now = () => Date.now() } = {}) {
+  const w = await world();
+  const { Look } = await import('../js/look.js');
+  const sw = w.open('switchboard'), asked = [], loads = [];
+  const look = new Look({ call: b => { asked.push(structuredClone(b)); return sw.call(b); }, now,
+    load: async (l, tries) => { loads.push([l, tries]); if (mods[l] instanceof Error) throw mods[l]; return mods[l]; } });
+  return { ...w, sw, look, asked, loads, mods, Look };
+}
+
+test('Needs a look reads every app\'s records through the ledger, only listing them, and each app says its own lines', async () => {
+  const { open, look, asked, sheets, Look } = await lookWorld();
+  const f = open('frostbite'), l = open('larder'), m = open('packrat');
+  f.put('zones', { id: 'top', name: 'Top basket' }); f.put('items', { id: 'a', name: 'Chili', zone: 'top' }); f.put('items', { id: 'b', name: 'Peas', zone: 'top' }); f.del('items', 'b');
+  l.put('items', { id: 'rice', name: 'Rice' });   // the same collection name as Frostbite's: each app's own tab
+  m.put('packs', { id: '03', weak: true }); m.put('packs', { id: '04' });
+  await Promise.all([f.flush(), l.flush(), m.flush()]);
+  const before = JSON.stringify(sheets);
+  await look.checkAll();
+  assert.deepEqual(look.lines().map(x => [x.text, x.href]), [
+    ['Freezer: Chili on Top basket', 'https://frostbite.junkdrawer.works/#top'], ['Packs: 03 weak', 'https://packrat.junkdrawer.works/#03'],
+    ['Larder: 1 on the list', 'https://larder.junkdrawer.works/']], 'a deleted record was handed on, or an app\'s lines are out of order');
+  assert.deepEqual([...new Set(asked.map(b => b.op))], ['list'], 'Needs a look asked the ledger for something other than lists');
+  assert.deepEqual(asked.map(b => `${b.app}.${b.coll}`).sort(), ['frostbite.items', 'frostbite.zones', 'larder.items', 'mothball.totes', 'packrat.packs', 'placard.reports']);
+  assert.equal(JSON.stringify(sheets), before, 'the sheet changed while Switchboard read it');
+  assert.deepEqual(look.down, []); assert.deepEqual(look.missing, []);
+  // what each app said is kept: a page opened later shows it at once, before anything is asked
+  const later = new Look({ call: () => { throw new Error('asked'); }, load: () => { throw new Error('loaded'); } });
+  assert.deepEqual(later.lines().map(x => x.text), ['Freezer: Chili on Top basket', 'Packs: 03 weak', 'Larder: 1 on the list']);
+  assert.ok(later.results.f.at > 0);
+});
+
+test('Needs a look asks only for what changed since, takes a delete at once, and a row cleared by hand by the next day', async t => {
+  const { open, look, asked, sheets, g } = await lookWorld();
+  t.mock.timers.enable({ apis: ['Date'], now: Date.now() });
+  const l = open('larder');
+  l.put('items', { id: 'rice', name: 'Rice' }); l.put('items', { id: 'oats', name: 'Oats' }); l.put('items', { id: 'beans', name: 'Beans' }); await l.flush();
+  await look.checkAll();
+  assert.equal(look.lines().find(x => x.l === 'p').text, 'Larder: 3 on the list');
+  t.mock.timers.tick(60e3);
+  asked.length = 0;
+  l.del('items', 'oats'); await l.flush();
+  await look.checkAll();
+  assert.ok(asked.every(b => b.since > 0), 'the whole of every collection was asked for again within the day');
+  assert.equal(look.lines().find(x => x.l === 'p').text, 'Larder: 2 on the list', 'a record deleted in the app stayed on the card');
+  const s = sheets['larder.items'], r = s.data.findIndex(x => x[0] === 'beans') + 1;
+  for (let c = 0; c < 4; c++) s.data[r - 1][c] = '';
+  g.onEdit({ range: s.getRange(r, 1, 1, 4) });
+  t.mock.timers.tick(60e3);
+  await look.checkAll();
+  assert.equal(look.lines().find(x => x.l === 'p').text, 'Larder: 2 on the list', 'the same day: a list of what changed can\'t say a row went');
+  t.mock.timers.tick(25 * 3600e3);
+  asked.length = 0;
+  await look.checkAll();
+  assert.ok(asked.every(b => b.since === 0), 'not listed whole after a day');
+  assert.equal(look.lines().find(x => x.l === 'p').text, 'Larder: 1 on the list');
+  // a tab renamed or deleted by hand: the copy stays, as the apps keep theirs
+  delete sheets['larder.items'];
+  t.mock.timers.tick(25 * 3600e3);
+  await look.checkAll();
+  assert.equal(look.lines().find(x => x.l === 'p').text, 'Larder: 1 on the list');
+});
+
+test('with no signal, or an app whose file doesn\'t load, the last word stays with its time and the error; the others go on', async () => {
+  const mods = standIns();
+  const { open, look, net, loads } = await lookWorld({ mods });
+  const m = open('packrat');
+  m.put('packs', { id: '03', weak: true }); await m.flush();
+  await look.checkAll();
+  const at = look.results.m.at;
+  net.up = false;
+  await look.checkAll();
+  assert.deepEqual(look.down, ['f', 'm', 'h', 'p', 't']);
+  assert.equal(look.results.m.error.kind, 'offline');
+  assert.equal(look.results.m.at, at, 'the time of the last word changed with no answer');
+  assert.deepEqual(look.lines().map(x => x.text), ['Packs: 03 weak'], 'the last word went with the signal');
+  assert.equal(look.oldest(look.down), at);
+  net.up = true;
+  // Packrat's site doesn't answer: its last word stays; the rest are up to date; asked again at a new address next time
+  mods.m = new TypeError('Failed to fetch dynamically imported module');
+  const fresh = new (look.constructor)({ call: b => look.call(b), load: async (l, tries) => { loads.push([l, tries]); if (mods[l] instanceof Error) throw mods[l]; return mods[l]; } });
+  await fresh.checkAll();
+  assert.deepEqual(fresh.down, ['m']);
+  assert.equal(fresh.results.m.error.kind, 'app');
+  assert.deepEqual(fresh.lines().map(x => x.text), ['Packs: 03 weak']);
+  mods.m = standIns().m;
+  await fresh.checkAll();
+  assert.deepEqual(fresh.down, []);
+  assert.deepEqual(loads.filter(([l]) => l === 'm').map(([, n]) => n).slice(-2), [0, 1], 'a file that failed was asked for at the same address again');
+  // a file that isn't an attention file (a page, an older release) counts as not answering
+  mods.t = { look: () => [] };
+  const odd = new (look.constructor)({ call: b => look.call(b), load: async l => mods[l] });
+  await odd.checkAll();
+  assert.deepEqual(odd.down, ['t']);
+});
+
+test('Forget, or another ledger, drops what Switchboard read and what the apps said', async () => {
+  const { open, look, sw } = await lookWorld();
+  const l = open('larder');
+  l.put('items', { id: 'rice', name: 'Rice' }); await l.flush();
+  await look.checkAll();
+  const kept = () => Object.keys(localStorage.s).filter(k => k.startsWith('switchboard.m.'));
+  assert.ok(kept().includes('switchboard.m.look') && kept().includes('switchboard.m.larder.items'), kept().join());
+  sw.setConfig(URL_.replace('/X/', '/Y/'), sw.cfg.key);
+  assert.deepEqual(kept(), [], 'another ledger\'s card kept the old one\'s records');
+  sw.setConfig(URL_, sw.cfg.key);
+  await look.checkAll();
+  assert.ok(kept().length > 0);
+  sw.forget();
+  assert.deepEqual(kept(), [], 'Forget kept the apps\' records on this device');
+});

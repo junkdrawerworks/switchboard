@@ -29,6 +29,12 @@
 
   <div class="notice ok" id="test-ok" hidden><p><b>Your test tag works.</b> It went to tag.junkdrawer.works/s/test and Switchboard sent it here.</p></div>
 
+  <section class="card" id="look" hidden>
+    <h2>Needs a look</h2>
+    <p class="sync" id="look-state"></p>
+    <ul class="list" id="look-list"></ul>
+  </section>
+
   <section class="card" id="check">
     <h2>Check a tag</h2>
     <p class="muted">Hold any sticker flat against the back of the phone, near the top, to see which app it belongs to and where it goes.</p>
@@ -37,6 +43,8 @@
     <div id="check-out" hidden></div>
   </section>
 
+  <details id="setup" open>
+  <summary><h2>Setup</h2><span class="sync" id="setup-state"></span></summary>
   <section class="card" id="ledger">
     <h2>Ledger</h2>
     <p class="muted">The Google Sheet the tag apps save to. Paste the web app address and the key from the sheet's About tab.</p>
@@ -76,6 +84,7 @@
     <p class="muted">The letter after the address picks the app. The rest is the item's own id.</p>
     <div class="tbl"><table><thead><tr><th>Letter</th><th>App</th><th>Goes to</th></tr></thead><tbody id="route-rows"></tbody></table></div>
   </section>
+  </details>
 
   <footer class="jd-foot">
     <a href="https://junkdrawer.works/">Part of junkdrawer.works</a><span aria-hidden="true">·</span><a href="https://junkdrawer.works/privacy.html">Privacy</a>

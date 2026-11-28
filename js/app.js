@@ -1,9 +1,10 @@
-import { $, h, mount, toast, buzz, confirmSheet, qrSvg, loadQr } from './kit/ui.js';
+import { $, h, mount, toast, buzz, confirmSheet, qrSvg, loadQr, stampText } from './kit/ui.js';
 import { APPS, parseTag, resolve, tagUrl } from './kit/tags.js';
 import { Ledger, connectLink, watchConnectLinks, readConnectLink } from './kit/ledger.js';
 import { readOnce, explainNfc, nfcSupported, cancelNfc } from './kit/nfc.js';
 import { nfcPanel } from './kit/panel.js';
 import { readOverrides, overridesWork, resolverWorks } from './overrides.js';
+import { Look } from './look.js';
 
 // Switchboard's own connect link (Another device, scanned on a second phone or tablet) sets up its ledger here as each
 // app's does there: taken before the ledger is made, and the key isn't left in the address. Switchboard is where every
@@ -33,6 +34,20 @@ const appOrder = ['h', 't', 'p', 'f', 'm'];
 const blurb = { h: 'The rental house manual', t: 'Seasonal totes', p: 'Consumables and spices', f: 'The freezer', m: 'Makita packs' };
 
 if (location.hash === '#test') { $('#test-ok').hidden = false; history.replaceState(null, '', location.pathname); }
+
+// ---- setup
+// Once connected, Switchboard opens on Needs a look, and the ledger, Connect, the test sticker and the letters fold
+// under Setup (which takes the key off the first screen). Not connected, Setup is open: it's all there is to do. A link
+// to one of its cards (each app's Open Switchboard goes to #apps) opens it there, and so does a ledger that needs
+// something done (a key it turned down, an older script).
+const setup = $('#setup');
+setup.open = !ledger.connected;
+function openSetupFor(hash = location.hash) {
+  const el = /^#[a-z][\w-]*$/.test(hash) ? document.getElementById(hash.slice(1)) : null;
+  if (el && el !== setup && setup.contains(el)) { setup.open = true; el.scrollIntoView(); }
+}
+openSetupFor();
+addEventListener('hashchange', () => openSetupFor());
 
 // ---- check a tag
 // Where a sticker goes is what the resolver says: its OVERRIDES, read from 404.html (this site's own; with no signal the
@@ -106,10 +121,13 @@ function renderLedger() {
     : answer.version && older(answer.version) ? ['pending', `Ledger script v${answer.version} is older than these apps need (v${WANT})`]
     : answer.version ? ['synced', `Connected to ledger v${answer.version}`] : [answer.error.kind || 'offline', stateLine(answer.error)];
   st.className = 'sync ' + k; st.textContent = text;
+  const folded = $('#setup-state'); folded.className = st.className; folded.textContent = text;   // seen with Setup folded too
+  if (!ledger.connected || answer?.error?.kind === 'badkey' || (answer?.version && older(answer.version))) setup.open = true;
   $('#ledger-forget').hidden = !ledger.connected;
   $('#way-back').hidden = !ledger.connected;   // where to look in the sheet after a mistake (the guide's Reference has the steps)
   renderApps();
   renderAnother();
+  renderLook();
 }
 // The saved address and key in the boxes: at load and after Test and save, never under someone typing a new key.
 const fillFields = () => { $('#lurl').value = ledger.cfg.url || ''; $('#lkey').value = ledger.cfg.key || ''; };
@@ -118,6 +136,7 @@ async function checkLedger() {
   if (!ledger.connected) return;
   answer = null; renderLedger();
   try { answer = { version: (await ledger.ping()).version }; } catch (e) { answer = { error: e }; }
+  if (answer.version) checkApps(); else { look.failAll(answer.error); asked = true; }   // the lists would fail the same way
   renderLedger();
 }
 $('#ledger-form').addEventListener('submit', async e => {
@@ -130,7 +149,8 @@ $('#ledger-form').addEventListener('submit', async e => {
   trial.cfg = { url, key };
   try {
     const j = await trial.ping();
-    ledger.setConfig(url, key); answer = { version: j.version }; fillFields();
+    if (url !== ledger.cfg.url) look.clear();   // another sheet: nothing the old one said stays on the card
+    ledger.setConfig(url, key); answer = { version: j.version }; fillFields(); checkApps();
     if (older(j.version)) { msg.textContent = `Connected, but the script is v${j.version}. ${OLD_FIX}`; msg.className = 'msg wait'; }
     else { msg.textContent = `Connected to ledger v${j.version}.`; msg.className = 'msg ok'; buzz(60); }
   } catch (err) {
@@ -142,9 +162,43 @@ $('#ledger-form').addEventListener('submit', async e => {
 // sheet. The apps keep their own connection.
 $('#ledger-forget').addEventListener('click', async () => {
   if (!await confirmSheet('Forget the ledger on this device?', 'Switchboard stops offering Connect here. The apps stay connected. To set it up again you need the web app address and the key from the sheet\'s About tab.', 'Forget', { danger: true })) return;
-  ledger.forget(); answer = null; fillFields(); renderLedger();
+  ledger.forget(); look.clear(); answer = null; fillFields(); renderLedger();
   toast('Forgotten on this device.');
 });
+
+// ---- needs a look
+// One card of what's due across the apps, each line a link into its app: each app's own rules (its js/attention.js,
+// imported from its address) over its records, read here from the ledger (look.js). The card shows the last word at
+// once, then each app's answer as it comes; with no signal, or an app that doesn't answer, the last word stays, with
+// its time. It's asked again when Switchboard is opened, and when it comes back to the front after a minute or more.
+const look = new Look({ call: body => ledger.call(body) });
+let asked = false;   // a check has been started in this page, or the ledger has said why not
+const names = ls => { const n = ls.map(l => APPS[l].name); return n.length > 1 ? `${n.slice(0, -1).join(', ')} and ${n.at(-1)}` : n[0]; };
+function checkApps() {
+  asked = true;
+  look.checkAll(() => renderLook()).then(() => renderLook());
+  renderLook();
+}
+function renderLook() {
+  $('#look').hidden = !ledger.connected;
+  if (!ledger.connected) return;
+  const st = $('#look-state'), down = look.down, lines = look.lines();
+  // what went wrong, short, and how old the last word shown is: 'Offline — as of Nov 27, 9:14 am', 'Packrat didn't answer'
+  const asOf = ls => { const t = look.oldest(ls); return t ? ` — as of ${stampText(t)}` : ''; };
+  const e = down.length ? look.results[down[0]].error : null;
+  const why = e && ({ app: `${names(down)} didn't answer`, badkey: 'Wrong key', broken: 'The ledger isn\'t answering', error: 'The ledger said no' }[e.kind] || 'Offline');
+  const [k, text] = look.running || !asked ? ['pending', 'Checking the apps…'] : !e ? ['synced', 'Up to date']
+    : [e.kind === 'app' ? 'offline' : e.kind, why + asOf(down)];
+  st.className = 'sync ' + k; st.textContent = text;
+  // each line's label ('Freezer:') in bold; nothing to say once every app has had its say, now or last time
+  mount($('#look-list'), lines.length ? lines.map(x => {
+    const [, label, rest] = /^([^:]{1,24}:)?\s*(.*)$/s.exec(x.text);
+    return h('li', {}, h('a', { class: 'row', href: x.href }, h('span', { class: 'main' }, h('span', { class: 't' }, label ? [h('b', {}, label), ' ', rest] : rest)), h('span', { class: 'meta', 'aria-hidden': 'true' }, '›')));
+  }) : look.missing.length ? [] : h('li', { class: 'empty' }, 'Nothing needs a look.'));
+}
+const again = () => { if (ledger.connected && !look.running && Date.now() - look.checkedAt > 60000) checkLedger(); };
+document.addEventListener('visibilitychange', () => { if (!document.hidden) again(); });
+addEventListener('online', again);
 
 // ---- another device
 // Switchboard's own connect link as a QR code: the other phone or tablet's camera opens it, its Switchboard is set up
@@ -199,4 +253,4 @@ fillFields();
 renderLedger();
 checkLedger();
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
-window.__switchboard = { ledger, toast };
+window.__switchboard = { ledger, toast, look };

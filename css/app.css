@@ -6,3 +6,18 @@
 #another-qr svg { display: block; width: min(260px, 100%); height: auto; margin: 10px 0; border-radius: 8px; }
 /* The Letters table on the narrowest phones (320 px): tighter cells, so "junkdrawer." fits beside the app names. */
 @media (max-width: 359px) { #routes .tbl th, #routes .tbl td { padding-left: 4px; padding-right: 4px; } }
+/* Setup: the ledger, Connect, the test sticker and the letters, folded under one heading once connected. The heading is
+   the button (44 px and more for a thumb), with the ledger's state line under it, so a problem shows folded too. */
+#setup > summary { list-style: none; cursor: pointer; padding: 4px 0 2px; }
+#setup > summary::-webkit-details-marker { display: none; }
+#setup > summary h2 { display: inline-flex; align-items: center; gap: 10px; margin: 18px 0 14px; }
+#setup > summary h2::after { content: ""; width: 9px; height: 9px; border: solid var(--ink2); border-width: 0 3px 3px 0; transform: translateY(-3px) rotate(45deg); }
+#setup:not([open]) > summary h2::after { transform: rotate(-45deg); }
+#setup > summary .sync { margin: -6px 0 12px; }
+#setup[open] > summary .sync { display: none; } /* open, the Ledger card says it */
+/* Needs a look: one line a row, its app's word in bold */
+#look-state { line-height: 1.35; } /* several apps that didn't answer can take two lines */
+#look-list { margin-bottom: 0; }
+#look-list .t { font-weight: 400; }
+#look-list .t b { font-weight: 600; }
+#look-list .empty { padding: 4px 0; text-align: left; }

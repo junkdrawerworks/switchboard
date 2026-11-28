@@ -385,6 +385,112 @@ async function connectAsks({ page, base, assert }) {
   } finally { await other.close(); }
 }
 
+// Each app's js/attention.js, as GitHub Pages serves it (any site may import it), here a stand-in for each app that says
+// what it was given: its records, the time, and whether a record that was deleted reached it. `blocked`: apps whose
+// site doesn't answer (404).
+const STAND_INS = {
+  frostbite: "export const COLLS = ['items', 'zones']; export function look(read) { const n = read('items').length; return n ? [{ text: 'Freezer: ' + n + ' past best', href: './' }] : []; }",
+  packrat: "export const COLLS = ['packs', 'reads', 'loans']; export function look(read) { return read('packs').filter(p => p.weak).map(p => ({ text: 'Packs: ' + p.id + ' weak', href: '#' + p.id })); }",
+  placard: "export const COLLS = ['site', 'reports']; export function look(read) { const n = read('reports').length; return n ? [{ text: 'Rental: ' + n + ' new report', href: '#/reports' }] : []; }",
+  larder: "export const COLLS = ['items', 'queue']; export function look(read) { const n = read('items').length; return n ? [{ text: 'Larder: ' + n + ' on the list', href: './' }] : []; }",
+  mothball: "export const COLLS = ['totes', 'builds']; export function look(read) { return []; }",
+};
+async function serveStandIns(target, blocked = new Set()) {
+  await target.route(/^https:\/\/(placard|mothball|larder|frostbite|packrat)\.junkdrawer\.works\/js\/attention\.js/, route => {
+    const app = /^https:\/\/(\w+)\./.exec(route.request().url())[1];
+    if (blocked.has(app)) return route.fulfill({ status: 404, contentType: 'text/html', body: '<h1>404</h1>' });
+    return route.fulfill({ contentType: 'text/javascript', headers: { 'access-control-allow-origin': '*' }, body: STAND_INS[app] });
+  });
+}
+
+// Needs a look, once connected: Switchboard opens on one card of what's due, each line a link into its app, from each
+// app's own attention file over its records from the ledger, and asks the ledger for nothing but lists. Setup is folded
+// (the key isn't on the first screen); an app's Open Switchboard (#apps) opens it, as does a key the ledger turns
+// down. With no signal, or an app's site down, the last word stays, with its time; Forget takes it all away.
+async function lookChecks({ browser, base, assert }) {
+  const U = 'https://script.google.com/macros/s/AKfyLOOK/exec', K = 'k'.repeat(40);
+  const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true });
+  const ops = [], errors = [], blocked = new Set();
+  let google = 'up', key = K, records = {
+    'frostbite.items': [{ id: 'a', name: 'Chili' }, { id: 'b', name: 'Peas', _deleted: true, _updated: 2 }],
+    'packrat.packs': [{ id: '03', weak: true }, { id: '04' }], 'placard.reports': [{ id: 'r1', text: 'Drip' }], 'larder.items': [{ id: 'rice' }, { id: 'oats' }] };
+  await ctx.route('https://script.google.com/**', async route => {
+    if (google === 'down') return route.abort('internetdisconnected');
+    const b = JSON.parse(route.request().postData() || '{}');
+    ops.push(b.op);
+    const out = b.key !== key ? { ok: false, error: 'bad key' } : b.op === 'list' ? { ok: true, time: Date.now(), docs: records[`${b.app}.${b.coll}`] || [] } : { ok: true, version: '1.1', time: 1 };
+    return route.fulfill({ contentType: 'application/json', body: JSON.stringify(out) });
+  });
+  await serveStandIns(ctx, blocked);
+  await ctx.addInitScript(([u, k]) => { try { if (!sessionStorage.getItem('set')) { localStorage.setItem('switchboard.ledger', JSON.stringify({ url: u, key: k })); sessionStorage.setItem('set', '1'); } } catch {} }, [U, K]);
+  const p = await ctx.newPage();
+  p.on('pageerror', e => errors.push(e.message));
+  const state = () => p.locator('#look-state').evaluate(el => [el.className, el.textContent]);
+  const lines = () => p.locator('#look-list li').evaluateAll(lis => lis.map(li => [li.textContent, li.querySelector('a')?.href || null]));
+  const settled = () => p.waitForFunction(() => !/Checking/.test(document.querySelector('#look-state').textContent));
+  try {
+    await p.goto(base);
+    await settled();
+    assert.deepEqual(await state(), ['sync synced', 'Up to date']);
+    assert.deepEqual(await lines(), [['Freezer: 1 past best›', 'https://frostbite.junkdrawer.works/'], ['Packs: 03 weak›', 'https://packrat.junkdrawer.works/#03'],
+      ['Rental: 1 new report›', 'https://placard.junkdrawer.works/#/reports'], ['Larder: 2 on the list›', 'https://larder.junkdrawer.works/']],
+    'the card\'s lines, in order, each a link into its app (a deleted record reached its app\'s file)');
+    assert.equal(await p.locator('#look-list b').first().textContent(), 'Freezer:');
+    // the card first; the setup cards folded, the key off the screen, the ledger's state on the fold
+    assert.deepEqual(await p.evaluate(() => [...document.querySelectorAll('main > section:not([hidden]), main > details')].map(e => e.id)), ['look', 'check', 'setup']);
+    assert.equal(await p.locator('#setup').evaluate(d => d.open), false, 'Setup open once connected');
+    assert.equal(await p.locator('#lkey').isVisible(), false, 'the key is on the first screen');
+    assert.equal(await p.locator('#setup-state').textContent(), 'Connected to ledger v1.1');
+    assert.deepEqual([...new Set(ops)].sort(), ['list', 'ping'], 'Needs a look asked the ledger for something other than lists');
+    assert.equal(await p.evaluate(() => document.documentElement.scrollWidth), 390);
+    // the summary opens and closes it, as any fold
+    await p.click('#setup > summary');
+    assert.equal(await p.locator('#lkey').isVisible(), true);
+    await p.click('#setup > summary');
+    // an app's Open Switchboard: Setup open at Connect the apps
+    await p.goto('about:blank'); await p.goto(base + '#apps');
+    await p.waitForFunction(() => document.querySelector('#setup').open);
+    assert.ok(await p.locator('#apps').evaluate(el => { const r = el.getBoundingClientRect(); return r.top >= 0 && r.top < innerHeight; }), 'Connect the apps isn\'t on the screen after #apps');
+    // nothing due anywhere: every record deleted in its app
+    const was = records;
+    records = Object.fromEntries(Object.entries(was).map(([k, docs]) => [k, docs.map(d => ({ id: d.id, _deleted: true, _updated: 3 }))]));
+    await p.goto(base); await settled();
+    assert.deepEqual(await lines(), [['Nothing needs a look.', null]]);
+    records = was;
+    await p.reload(); await settled();
+    // no signal: the last word stays, with its time
+    google = 'down';
+    await p.reload();
+    assert.equal((await lines()).length, 4, 'the last word wasn\'t there while the ledger was asked');
+    await p.waitForFunction(() => document.querySelector('#look-state').classList.contains('offline'));
+    assert.match((await state())[1], /^Offline — as of [A-Z][a-z]{2} \d+, \d+:\d\d [ap]m$/);
+    assert.equal((await lines()).length, 4, 'the last word went with the signal');
+    google = 'up';
+    // Packrat's site down: its last word stays, the others are new
+    blocked.add('packrat');
+    records['larder.items'] = [{ id: 'rice' }, { id: 'oats', _deleted: true, _updated: 4 }];
+    await p.reload(); await settled();
+    assert.match((await state())[1], /^Packrat didn't answer — as of /);
+    assert.deepEqual((await lines()).map(x => x[0]), ['Freezer: 1 past best›', 'Packs: 03 weak›', 'Rental: 1 new report›', 'Larder: 1 on the list›']);
+    blocked.clear();
+    // the key turned down (setup run again in the sheet): Setup opens on the key
+    key = 'n'.repeat(40);
+    await p.reload();
+    await p.waitForFunction(() => document.querySelector('#look-state').classList.contains('badkey'));
+    assert.match((await state())[1], /^Wrong key — as of /);
+    assert.equal(await p.locator('#setup').evaluate(d => d.open), true, 'Setup stayed folded with the key turned down');
+    assert.equal(await p.locator('#lkey').isVisible(), true);
+    // Forget: the card goes, and nothing the apps said is kept
+    await p.click('#ledger-forget');
+    await p.click('dialog[open] button[type=submit]');
+    await p.waitForFunction(() => document.querySelector('#look').hidden);
+    assert.deepEqual(await p.evaluate(() => Object.keys(localStorage).filter(k => k.startsWith('switchboard.m.'))), [], 'Forget kept the apps\' records');
+    await p.reload();
+    assert.deepEqual([await p.locator('#look').isHidden(), await p.locator('#setup').evaluate(d => d.open)], [true, true]);
+    assert.deepEqual(errors, [], 'errors on the page');
+  } finally { await ctx.close(); }
+}
+
 // Installed on Android, an app opens every address inside its scope in its own window. Switchboard's scope is its page
 // alone, so a sticker's address (/h/water-heater, on the same origin) opens the resolver in the browser as on any other
 // phone. Chrome reads the manifest without errors (a scope that doesn't hold start_url is ignored, with an error), it can
@@ -412,6 +518,8 @@ async function manifestChecks({ page, base, assert }) {
 export async function appChecks({ page, ctx, base, assert, problems }) {
   await manifestChecks({ page, base, assert });
   await resolverChecks({ browser: ctx.browser(), assert });
+  await lookChecks({ browser: ctx.browser(), base, assert });
+  await serveStandIns(page);   // once this page is connected below, its card asks the apps too
   await checkATag({ page, base, assert });
   await writeOver({ page, assert });
   // a toast takes the phone's width, so a sentence stays on one or two lines (left: 50% once squeezed it into half)
@@ -495,6 +603,7 @@ export async function appChecks({ page, ctx, base, assert, problems }) {
   google = 'down';
   await page.reload();
   assert.deepEqual(await state(), ['sync pending', 'Checking the ledger…']);
+  await page.click('#setup > summary');   // connected, Switchboard opens on Needs a look with the ledger folded under Setup
   await page.fill('#lkey', 'n'.repeat(40));
   await page.waitForFunction(() => document.querySelector('#ledger-state').classList.contains('offline'));
   assert.equal(await page.inputValue('#lkey'), 'n'.repeat(40));
@@ -508,6 +617,7 @@ export async function appChecks({ page, ctx, base, assert, problems }) {
   assert.equal(await page.locator('#test-ok').isHidden(), false, 'the test tag note shows');
   await page.waitForFunction(() => document.querySelector('#ledger-state').textContent === 'Connected to ledger v1.1');
   // Forget asks first, with the red button; Cancel keeps the address and key
+  await page.click('#setup > summary');
   await page.click('#ledger-forget');
   const ask = page.getByRole('dialog', { name: 'Forget the ledger on this device?' });
   await ask.waitFor();
@@ -525,5 +635,5 @@ export async function appChecks({ page, ctx, base, assert, problems }) {
   assert.equal(await page.locator('#another').isHidden(), true, 'Another device offered after Forget');
   assert.equal(await page.locator('#way-back').isHidden(), true, 'the way back after a mistake left after Forget');
   await page.unroute('https://script.google.com/**');
-  for (let i = problems.length - 1; i >= from; i--) if (/script\.google\.com|Failed to load resource: net::ERR_INTERNET_DISCONNECTED/.test(problems[i])) problems.splice(i, 1);
+  for (let i = problems.length - 1; i >= from; i--) if (/script\.google\.com|junkdrawer\.works\/js\/attention\.js|Failed to load resource: net::ERR_INTERNET_DISCONNECTED/.test(problems[i])) problems.splice(i, 1);
 }
