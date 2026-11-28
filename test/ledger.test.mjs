@@ -69,8 +69,14 @@ function fakeGoogle() {
     CacheService: { getScriptCache: () => ({ get: k => cache[k] ?? null, put: (k, v) => { cache[k] = v; } }) },
     MailApp: { sendEmail: (...a) => { if (mail.refuse) throw new Error('Service invoked too many times for one day: email.'); mail.quota--; mail.push(a); },
       getRemainingDailyQuota: () => mail.quota },
-    Session: { getEffectiveUser: () => ({ getEmail: () => 'owner@example.com' }) },
-    Utilities: { getUuid: () => `0000000${++uuid}-aaaa-bbbb-cccc-dddddddddddd`.slice(-36) },
+    Session: { getEffectiveUser: () => ({ getEmail: () => 'owner@example.com' }), getScriptTimeZone: () => mail.tz || 'America/New_York' },
+    Utilities: { getUuid: () => `0000000${++uuid}-aaaa-bbbb-cccc-dddddddddddd`.slice(-36),
+      // Google's formatDate with the few SimpleDateFormat letters the script uses, in the time zone it's given
+      formatDate: (d, tz, f) => {
+        const p = Object.fromEntries(new Intl.DateTimeFormat('en-US', { timeZone: tz, weekday: 'short', month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true })
+          .formatToParts(d).map(x => [x.type, x.value]));
+        return f.replace(/EEE|MMM|yyyy|mm|d|h|a/g, k => ({ EEE: p.weekday, MMM: p.month, yyyy: p.year, mm: p.minute, d: p.day, h: p.hour, a: p.dayPeriod })[k]);
+      } },
     ContentService: { MimeType: { JSON: 'json' }, createTextOutput: t => ({ text: t, setMimeType() { return this; } }) },
     Logger: { log() {} },
     console, JSON, Date, Math, Object, Array, String, Number,
@@ -318,6 +324,26 @@ test('a report\'s email names its page by the page\'s own name, never the name t
   const kept = post(g, { key, op: 'list', app: 'placard', coll: 'reports', since: 0 }).docs;
   assert.deepEqual(kept.map(r => r.systemName || ''), ['Water heater', 'Water heater', '', '', '']);
   assert.equal(kept[0].system, 'water-heater');
+});
+
+test('a report\'s email says when in the script\'s own time zone, links to the Reports screen, and Reply goes to an email left in it', () => {
+  const { g, props, mail } = fakeGoogle();
+  g.setup();
+  mail.tz = 'America/Los_Angeles';
+  const RealDate = Date, T = RealDate.UTC(2026, 10, 27, 10, 19);
+  g.Date = class extends RealDate { constructor(...a) { super(...(a.length ? a : [T])); } static now() { return T; } };
+  post(g, { key: props.KEY, op: 'put', app: 'placard', coll: 'site', id: 'well-pump', doc: { name: 'Well pump' } });
+  const send = doc => post(g, { op: 'report', app: 'placard', coll: 'reports', doc: { system: 'well-pump', kind: 'Problem', ...doc } });
+  send({ text: 'No water pressure', name: 'Pat', contact: 'pat@example.com' });
+  send({ text: 'Pump clicking', name: 'Sam', contact: '555-0177' });
+  send({ text: 'Pump humming', contact: 'pat@example.com, other@example.com' });
+  assert.deepEqual(mail[0][2].split('\n'), ['No water pressure', '', 'From: Pat pat@example.com', 'System: Well pump', 'At: Fri, Nov 27, 2026, 2:19 AM',
+    'All reports: https://placard.junkdrawer.works/#/reports']);
+  assert.deepEqual({ ...mail[0][3] }, { replyTo: 'pat@example.com' });
+  assert.deepEqual({ ...mail[1][3] }, {}, 'a phone number as Reply-To');
+  assert.deepEqual({ ...mail[2][3] }, {}, 'two addresses typed by a visitor as Reply-To');
+  // kept in UTC for the Reports screen, which shows it in the phone's own time
+  assert.equal(post(g, { key: props.KEY, op: 'list', app: 'placard', coll: 'reports', since: 0 }).docs[0].at, '2026-11-27T10:19:00.000Z');
 });
 
 test('the same report from the same page twice in an hour is kept once more but not emailed again, and the page is told when it went', () => {

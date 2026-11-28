@@ -317,8 +317,13 @@ function report(name, doc) {
       // a sticker with no page says which sticker, if it's one a sticker can be
       const where = clean.systemName || (STICKER.test(clean.system || '') && FRONT.indexOf(clean.system) < 0
         ? 'general (sticker h/' + clean.system + ', which has no page in the manual)' : 'general');
+      // the time in the script's own time zone (Project Settings in the editor), a way to the Reports screen, and Reply
+      // to the tenant when they left an email address
+      const at = Utilities.formatDate(new Date(clean.at), Session.getScriptTimeZone(), 'EEE, MMM d, yyyy, h:mm a');
       MailApp.sendEmail(String(to), 'House manual: ' + kind + ' — ' + (clean.systemName || 'general'),
-        [clean.text, '', 'From: ' + (clean.name || '(no name)') + ' ' + (clean.contact || ''), 'System: ' + where, 'At: ' + clean.at].join('\n'));
+        [clean.text, '', 'From: ' + (clean.name || '(no name)') + ' ' + (clean.contact || ''), 'System: ' + where, 'At: ' + at,
+          'All reports: https://placard.junkdrawer.works/#/reports'].join('\n'),
+        EMAIL.test(clean.contact || '') ? { replyTo: clean.contact } : {});
       emailed = true;
     }
   } catch (e) { /* the report is saved even if the email fails */ }
@@ -327,6 +332,7 @@ function report(name, doc) {
 const KINDS = ['Problem', 'Service visit', 'Question'];         // the report form's three
 const FRONT = ['', 'house', 'home'];                            // the front page
 const STICKER = /^[a-z0-9][a-z0-9-]{0,39}$/;                    // what a sticker's id can be
+const EMAIL = /^[^\s@,;<>"]+@[^\s@,;<>"]+\.[^\s@,;<>"]+$/;          // one email address, as a tenant types it
 const SITE = { 'placard.reports': 'placard.site' };             // where the pages a report names are
 // A page's own name: '' for the front page, a deleted page or an id that isn't a page.
 function pageName(name, id) {
