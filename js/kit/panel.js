@@ -25,8 +25,9 @@ const panels = new Map();
 // the panel says when the sticker held to the phone isn't this one ("This sticker opens Water heater, not Furnace").
 // A new sticker written for a locked page is a replacement or a spare, and the panel asks which once it's written
 // (when the app gives onSpare): a replacement is saved as written (onWritten, as before: the page reads not locked yet
-// until it's locked too); a spare leaves the page locked (onSpare), and locking it then is onSpareLocked. spare and
-// spareLocked are the days the last spare was written and locked, said under the locked line.
+// until it's locked too, and so is the question closed unanswered); a spare leaves the page locked (onSpare), and
+// locking it then is onSpareLocked. spare and spareLocked are the days the last spare was written and locked, said
+// under the locked line.
 export const MOVE = 'To send it somewhere else, add it to OVERRIDES in Switchboard\'s 404.html.';
 export function nfcPanel(url, { label = 'Write sticker', lock = false, onWritten = null, onLocked = null, note = '', tagged = null, locked = null, sample = false, move = MOVE,
   name = 'this page', nameOf = null, spare = null, spareLocked = null, onSpare = null, onSpareLocked = null } = {}) {
@@ -74,10 +75,12 @@ export function nfcPanel(url, { label = 'Write sticker', lock = false, onWritten
     if (r === 'written') {
       buzz(80); say(lock && !sample ? 'Written. Tap it with the phone to check, then lock it.' : 'Written. Tap it with the phone to check it opens this page.', 'ok');
       if (!(locked && onSpare)) { onWritten?.(); return; }
-      // closed without an answer (Escape, Back), it's a spare: the page stays as it was, locked
+      // closed without an answer (Escape, Back), it counts as a replacement: the page reads not locked yet until a
+      // sticker is locked, which is safe either way (a spare locked turns it green too), where a spare would leave the
+      // page green while an unlocked sticker might be on the wall
       const v = await sheet({ title: 'Replacing the one on the wall, or a spare to keep?', ok: 'A spare to keep', other: 'Replacing it', cancel: null,
         body: h('p', {}, 'Replacing it: this page reads written, not locked yet, until you lock the new one. A spare: the page stays locked, and the spare is noted under it.') });
-      if (v?.__other) onWritten?.(); else onSpare();
+      if (!v || v.__other) onWritten?.(); else onSpare();
     }
     // a sticker already holding the link is written as far as anyone can tell: saved as written if it wasn't yet
     else if (r === 'same') { buzz(80); say('Already holds this link.', 'ok'); if (!tagged && !locked) onWritten?.(); }
