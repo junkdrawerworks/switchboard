@@ -26,10 +26,12 @@ function setup() {
   }
   const ss = SpreadsheetApp.getActive();
   const about = ss.getSheetByName('About') || ss.insertSheet('About', 0);
+  // who gets the reports: kept when it already holds an address (yours and the property manager's, say)
+  const to = String(about.getRange('B3').getValue() || '').trim();
   about.getRange('A1:B5').setValues([
     ['Switchboard ledger', 'v' + VERSION],
     ['Key', key],
-    ['Reports go to', Session.getEffectiveUser().getEmail()],
+    ['Reports go to (more than one: separate with commas)', /@/.test(to) ? to : Session.getEffectiveUser().getEmail()],
     ['Tabs', 'Change a json cell and the apps pick it up at their next sync; keep it valid JSON. To remove a record, put TRUE in its deleted cell; to bring one back, FALSE. After restoring an earlier version, use Ledger › Send everything to the phones again.'],
     ['Set up', new Date()],
   ]);

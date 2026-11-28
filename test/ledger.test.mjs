@@ -95,6 +95,23 @@ test('setup writes a key on the About tab, and ping works with and without it', 
   assert.equal(post(g, { op: 'ping', key: props.KEY }).ok, true);
 });
 
+test('setup run again keeps the addresses reports go to, and says more than one can go there', () => {
+  const { g, props, sheets, mail } = fakeGoogle();
+  g.setup();
+  assert.deepEqual(sheets.About.data[2], ['Reports go to (more than one: separate with commas)', 'owner@example.com']);
+  sheets.About.data[2][1] = 'owner@example.com, manager@example.com';
+  const key = props.KEY;
+  g.setup();                                                       // the guide's fail rows say to run it again
+  assert.equal(sheets.About.data[2][1], 'owner@example.com, manager@example.com', 'setup put back only the owner');
+  assert.equal(props.KEY, key);
+  post(g, { op: 'report', app: 'placard', coll: 'reports', doc: { text: 'Drip' } });
+  assert.equal(mail[0][0], 'owner@example.com, manager@example.com');
+  // emptied, or something that isn't an address: the owner's again
+  sheets.About.data[2][1] = 'nobody';
+  g.setup();
+  assert.equal(sheets.About.data[2][1], 'owner@example.com');
+});
+
 test('put, list since, replace, delete and batch', () => {
   const { g, props } = fakeGoogle();
   g.setup();
