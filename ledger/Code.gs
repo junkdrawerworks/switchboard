@@ -11,6 +11,7 @@ const PUBLIC_REPORT = { 'placard.reports': 30 };      // anyone may add to these
 // Reports emailed in a day, at most. Gmail lets a script email 100 people a day (1,500 on Workspace), shared by every
 // script you run: developers.google.com/apps-script/guides/services/quotas. Past this a report is still kept.
 const MAIL_PER_DAY = 20;
+const TOO_MANY = 'too many reports this hour; try later or call';
 const HEAD = ['id', 'updated', 'deleted', 'json'];
 const TAB = /^[a-z0-9-]{1,30}\.[a-z0-9-]{1,30}$/;    // a collection's tab: app.collection
 // Collections whose ids are numbers written with two digits (tote 01, pack 07): see mend().
@@ -276,6 +277,11 @@ function report(name, doc) {
   const clean = {};
   ['system', 'systemName', 'kind', 'name', 'contact', 'text'].forEach(function (f) { if (doc[f]) clean[f] = String(doc[f]).slice(0, f === 'text' ? 2000 : 120); });
   if (!clean.text) return { ok: false, error: 'empty report' };
+  // Over the hour's share: turned down before waiting for the lock that every phone's save, Pinch and Home Assistant
+  // need (anyone can post a report), and counted again under it.
+  const cache = CacheService.getScriptCache(), hour = 'rep:' + name + ':' + new Date().getHours();
+  const full = function () { return Number(cache.get(hour) || 0) >= max; };
+  if (full()) return { ok: false, error: TOO_MANY };
   clean.at = new Date().toISOString();
   clean.status = 'new';
   const day = clean.at.slice(0, 10);
@@ -283,17 +289,14 @@ function report(name, doc) {
   let mailOk = false;
   // Counted, kept and given today's email slot under the lock, so two at once can't both take the last one.
   const saved = locked(function () {
-    const cache = CacheService.getScriptCache();
-    const k = 'rep:' + name + ':' + new Date().getHours();
-    const n = Number(cache.get(k) || 0);
-    if (n >= max) return false;
-    cache.put(k, String(n + 1), 3600);
+    if (full()) return false;
+    cache.put(hour, String(Number(cache.get(hour) || 0) + 1), 3600);
     write({ op: 'add', app: name.split('.')[0], coll: name.split('.')[1], doc: clean });
     const was = String(props.getProperty('MAILED') || '').split(' '), mailed = was[0] === day ? Number(was[1]) || 0 : 0;
     if (mailed < MAIL_PER_DAY) { mailOk = true; props.setProperty('MAILED', day + ' ' + (mailed + 1)); }
     return true;
   });
-  if (!saved) return { ok: false, error: 'too many reports this hour; try later or call' };
+  if (!saved) return { ok: false, error: TOO_MANY };
   let emailed = false;
   try {
     const to = SpreadsheetApp.getActive().getSheetByName('About').getRange('B3').getValue();

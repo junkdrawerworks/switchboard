@@ -251,6 +251,18 @@ test('only a real report counts towards the hour', () => {
   assert.equal(post(g, { key: props.KEY, op: 'list', app: 'placard', coll: 'reports', since: 0 }).docs.length, 1);
 });
 
+test('a report over the hour\'s 30 is turned down without waiting for the lock every save needs', () => {
+  const { g, locks } = fakeGoogle();
+  g.setup();
+  const RealDate = Date, T = RealDate.UTC(2026, 10, 27, 10);   // one hour's reports, whatever the hour the test runs
+  g.Date = class extends RealDate { constructor(...a) { super(...(a.length ? a : [T])); } static now() { return T; } };
+  const send = text => post(g, { op: 'report', app: 'placard', coll: 'reports', doc: { text } });
+  for (let i = 0; i < 30; i++) assert.equal(send('n' + i).ok, true);
+  locks.length = 0;
+  for (let i = 0; i < 40; i++) assert.match(send('more ' + i).error, /too many/);
+  assert.deepEqual(locks, [], 'a report over the cap took the script lock');
+});
+
 test('a report says whether the email went: at most 20 a day, never past Google\'s quota, and kept either way', () => {
   const { g, props, mail } = fakeGoogle();
   g.setup();
