@@ -1844,6 +1844,41 @@ test('Forget, or another ledger, drops what Switchboard read and what the apps s
   assert.deepEqual(kept(), [], 'Forget kept the apps\' records on this device');
 });
 
+test('Forget, or another ledger saved, while a check is still asking writes nothing of the old one, and the next check reads the new one', async () => {
+  const { open, sw, props, Look } = await lookWorld();
+  const l = open('larder');
+  l.put('items', { id: 'rice', name: 'Rice' }); await l.flush();
+  // each list is asked at once and answered only when the test lets it; the other ledger (Y) is an empty sheet
+  const held = [], release = () => { for (const go of held.splice(0)) go(); };
+  const look = new Look({ load: async l => standIns()[l], call: async b => {
+    const answer = sw.cfg.url.includes('/Y/') ? { ok: true, docs: [], time: Date.now() } : await sw.call(b);
+    await new Promise(go => held.push(go));
+    return answer;
+  } });
+  const asking = async n => { for (let i = 0; i < 200 && held.length < n; i++) await tick(); assert.equal(held.length, n, 'the lists weren\'t all asked'); };
+  const kept = () => Object.keys(localStorage.s).filter(k => k.startsWith('switchboard.m.'));
+  // Forget while the lists are out: their answers come back after it, and nothing is written back
+  let run = look.checkAll();
+  await asking(6);
+  sw.forget(); look.clear();
+  release(); await run;
+  assert.deepEqual(kept(), [], 'the old sheet\'s records were written back after Forget');
+  assert.deepEqual([look.lines(), look.down], [[], []]);
+  // connected again; a check starts, and another sheet's address is saved (Test and save) before it answers
+  sw.setConfig(URL_, props.KEY);
+  run = look.checkAll();
+  await asking(6);
+  look.clear(); sw.setConfig(URL_.replace('/X/', '/Y/'), props.KEY);
+  const next = look.checkAll();
+  assert.notEqual(next, run, 'the check after the new address joined the old sheet\'s run');
+  let done = false; Promise.all([run, next]).then(() => { done = true; });
+  for (let i = 0; i < 200 && !done; i++) { release(); await tick(); }
+  assert.ok(done);
+  assert.deepEqual(look.lines(), [], 'the card shows the old sheet\'s lines');
+  assert.deepEqual(look.get('switchboard.m.larder.items')?.docs, {}, 'the old sheet\'s records became the new one\'s copy');
+  assert.ok(look.checkedAt > 0 && !look.running);
+});
+
 test('Find anything searches what each app says it holds, the kit\'s way, and Check a tag knows what each sticker is for', async () => {
   const mods = standIns();
   mods.p = { ...mods.p, things: read => read('items').map(i => ({ name: i.name, where: i.place, href: '#' + i.id, texts: [i.name, i.place] })),
