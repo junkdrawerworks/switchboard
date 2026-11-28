@@ -140,16 +140,23 @@ export async function resolverChecks({ browser, assert }) {
 }
 
 // A pretend Chrome NFC reader: scan() listens until its signal aborts; __nfc.tap(url) holds a sticker to it (no url: a
-// blank one) and says whether anything was listening.
+// blank one) and says whether anything was listening. A write meets __nfc.sticker (null: a blank one): one holding a
+// link (or refuse: one Chrome takes for holding something) turns down a write that mustn't write over it, and a locked
+// one turns down every write, both with a NotAllowedError, as Chrome does.
 const fakeNfc = () => {
-  window.__nfc = { readers: [], writes: [] };
+  window.__nfc = { readers: [], writes: [], sticker: null };
   window.NDEFReader = class {
     async scan({ signal } = {}) {
       if (signal?.aborted) throw new DOMException('aborted', 'AbortError');
       this.listening = true; window.__nfc.readers.push(this);
       signal?.addEventListener('abort', () => { this.listening = false; });
     }
-    async write(m) { window.__nfc.writes.push(m.records[0].data); }
+    async write(m, { overwrite = true } = {}) {
+      const s = window.__nfc.sticker;
+      if (s?.locked) throw new DOMException('', 'NotAllowedError');
+      if (s && !overwrite && (s.url || s.refuse)) throw new DOMException('NDEFWriteOptions#overwrite does not allow overwrite.', 'NotAllowedError');
+      window.__nfc.writes.push(m.records[0].data);
+    }
   };
   window.__nfc.tap = url => {
     const r = window.__nfc.readers.filter(x => x.listening).at(-1);
@@ -202,6 +209,71 @@ async function checkATag({ page, base, assert }) {
   assert.equal(await text('#check-out .tape-cap'), 'f / Frostbite');
 }
 
+// Write test sticker on a sticker that already holds something: it isn't written over unless asked. The kit's sticker
+// panel, the same in every app.
+async function writeOver({ page, assert }) {
+  const said = () => page.locator('#test-panel .nfc > .msg:last-child').evaluate(el => [el.className, el.textContent]);
+  const press = async (sticker, holds) => {
+    await page.evaluate(s => { window.__nfc.sticker = s; }, sticker);
+    await page.click('#test-panel >> text=Write test sticker');
+    if (holds === undefined) return;
+    // turned down: the panel reads what the sticker holds, still against the phone
+    await page.waitForFunction(() => window.__nfc.readers.some(r => r.listening));
+    assert.equal(await page.evaluate(u => window.__nfc.tap(u), holds), true);
+  };
+  const writes = () => page.evaluate(() => window.__nfc.writes.length);
+  const n = await writes();
+  // a blank sticker: written at once, without writing over anything
+  await press(null);
+  await page.waitForFunction(w => window.__nfc.writes.length > w, n);
+  assert.deepEqual(await said(), ['msg ok', 'Written. Tap it with the phone to check it opens this page.']);
+  // the test sticker itself: already holds this link, nothing written
+  await press({ url: 'https://tag.junkdrawer.works/s/test' }, 'https://tag.junkdrawer.works/s/test');
+  await page.waitForFunction(() => /^Already/.test(document.querySelector('#test-panel .nfc > .msg:last-child').textContent));
+  assert.deepEqual(await said(), ['msg ok', 'Already holds this link.']);
+  assert.equal(await writes(), n + 1, 'written over the same link');
+  // a tote's sticker: asked first, and left alone on Cancel
+  await press({ url: 'https://tag.junkdrawer.works/t/02' }, 'https://tag.junkdrawer.works/t/02');
+  const ask = page.getByRole('dialog', { name: 'Write over this sticker?' });
+  await ask.waitFor();
+  assert.equal(await ask.locator('form > p').textContent(), 'It already opens Mothball tote 02. Writing over it makes it open this page instead. Hold it to the phone again after you press Write over it.');
+  assert.deepEqual(await ask.locator('button[type=submit]').evaluate(b => [b.textContent, b.className]), ['Write over it', 'btn danger']);
+  await ask.locator('button', { hasText: 'Cancel' }).click();
+  await page.waitForFunction(() => /^Nothing written/.test(document.querySelector('#test-panel .nfc > .msg:last-child').textContent));
+  assert.deepEqual(await said(), ['msg ', 'Nothing written. The sticker keeps its old link.']);
+  assert.equal(await writes(), n + 1, 'written over a tote\'s sticker without asking');
+  // and written over when asked
+  await press({ url: 'https://tag.junkdrawer.works/t/02' }, 'https://tag.junkdrawer.works/t/02');
+  await ask.waitFor();
+  await ask.locator('button[type=submit]').click();
+  await page.waitForFunction(w => window.__nfc.writes.length > w, n + 1);
+  assert.deepEqual(await said(), ['msg ok', 'Written. Tap it with the phone to check it opens this page.']);
+  // something that isn't a link
+  await page.evaluate(() => { window.__nfc.sticker = { refuse: true }; });
+  await page.click('#test-panel >> text=Write test sticker');
+  await page.waitForFunction(() => window.__nfc.readers.some(r => r.listening));
+  await page.evaluate(() => { const r = window.__nfc.readers.filter(x => x.listening).at(-1);
+    r.onreading({ serialNumber: '04', message: { records: [{ recordType: 'text', data: new TextEncoder().encode('Hello') }] } }); });
+  await ask.waitFor();
+  assert.match(await ask.locator('form > p').textContent(), /^It already holds something that isn't a link\. /);
+  await ask.locator('button', { hasText: 'Cancel' }).click();
+  // a blank sticker Chrome turns down anyway (a factory-blank one counted as holding something): written without asking
+  await press({ refuse: true }, '');
+  await page.waitForFunction(w => window.__nfc.writes.length > w, n + 2);
+  assert.equal(await page.locator('dialog[open]').count(), 0, 'asked before writing a blank sticker');
+  assert.deepEqual(await said(), ['msg ok', 'Written. Tap it with the phone to check it opens this page.']);
+  // a locked sticker: asked, then it says it's locked
+  await press({ url: 'https://tag.junkdrawer.works/h/water-heater', locked: true }, 'https://tag.junkdrawer.works/h/water-heater');
+  await ask.waitFor();
+  assert.match(await ask.locator('form > p').textContent(), /^It already opens Placard's water-heater page\. /);
+  await ask.locator('button[type=submit]').click();
+  await page.waitForFunction(() => /locked/.test(document.querySelector('#test-panel .nfc > .msg:last-child').textContent));
+  assert.deepEqual(await said(), ['msg bad', 'That sticker is locked. Use a blank one.']);
+  assert.equal(await writes(), n + 3);
+  assert.equal(await page.evaluate(() => window.__nfc.readers.some(r => r.listening)), false, 'still listening after the writes');
+  await page.evaluate(() => { window.__nfc.sticker = null; });
+}
+
 // Installed on Android, an app opens every address inside its scope in its own window. Switchboard's scope is its page
 // alone, so a sticker's address (/h/water-heater, on the same origin) opens the resolver in the browser as on any other
 // phone. Chrome reads the manifest without errors (a scope that doesn't hold start_url is ignored, with an error), it can
@@ -230,6 +302,7 @@ export async function appChecks({ page, ctx, base, assert, problems }) {
   await manifestChecks({ page, base, assert });
   await resolverChecks({ browser: ctx.browser(), assert });
   await checkATag({ page, base, assert });
+  await writeOver({ page, assert });
   // a toast takes the phone's width, so a sentence stays on one or two lines (left: 50% once squeezed it into half)
   await page.evaluate(() => window.__switchboard.toast('Couldn\'t send it. Check the signal, or call.'));
   await page.waitForTimeout(300);

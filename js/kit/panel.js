@@ -1,6 +1,16 @@
 // The sticker panel every item screen uses: shows the tag link and writes it (and, where asked, locks it).
 import { h, buzz, confirmSheet, dayText } from './ui.js';
-import { nfcSupported, writeUrl, lockTag, explainNfc, cancelNfc } from './nfc.js';
+import { nfcSupported, writeUrl, lockTag, readOnce, refusedWrite, explainNfc, cancelNfc } from './nfc.js';
+import { parseTag } from './tags.js';
+
+// Two links for the same sticker: the same tag (any case, a trailing slash), or the same text.
+const sameLink = (a, b) => { const x = parseTag(a), y = parseTag(b); return x && y ? x.letter === y.letter && x.id === y.id : String(a).trim() === String(b).trim(); };
+// What another sticker's link opens, in words: the app's own name for one of its stickers (nameOf), or the app and the
+// id ("Mothball tote 02"); a link that isn't a tag as it is.
+const THINGS = { h: id => id === 'house' || id === 'home' ? 'Placard\'s front page' : `Placard's ${id} page`, t: id => `Mothball tote ${id}`,
+  p: id => `Larder's ${id}`, f: id => `Frostbite's ${id}`, m: id => `Packrat pack ${id}`, s: id => id === 'test' ? 'Switchboard\'s test sticker' : `Switchboard's ${id}` };
+const opens = (link, nameOf) => { const t = parseTag(link); return !t ? link : nameOf?.(t) || THINGS[t.letter]?.(t.id) || link; };
+const HOLD = 'Hold the sticker flat against the back of the phone, near the top, and keep it still.';
 
 // Each sticker's panel state, by its link. A page draws a new panel after a save or a sync, and the new one carries on
 // from the old: "Written. Tap it with the phone to check…" stays, a write in progress keeps its Stop button.
@@ -9,31 +19,61 @@ const panels = new Map();
 // tagged and locked are the days (YYYY-MM-DD) the app saved when this sticker was written and locked. In the sample
 // (sample: true) Write still writes a real sticker, which is handy for trying the phone's reader, but Lock is off: it
 // can't be undone, and the sample's pages aren't the real ones. move: what the locked line says after its date, how to
-// send a locked sticker somewhere else (Switchboard's OVERRIDES unless the app has its own way).
+// send a locked sticker somewhere else (Switchboard's OVERRIDES unless the app has its own way). name: what this
+// sticker is for, and nameOf({ letter, id }): the app's name for another of its stickers, or nothing, both for what
+// the panel says when the sticker held to the phone isn't this one ("This sticker opens Water heater, not Furnace").
 export const MOVE = 'To send it somewhere else, add it to OVERRIDES in Switchboard\'s 404.html.';
-export function nfcPanel(url, { label = 'Write sticker', lock = false, onWritten = null, onLocked = null, note = '', tagged = null, locked = null, sample = false, move = MOVE } = {}) {
+export function nfcPanel(url, { label = 'Write sticker', lock = false, onWritten = null, onLocked = null, note = '', tagged = null, locked = null, sample = false, move = MOVE,
+  name = 'this page', nameOf = null } = {}) {
   const st = panels.get(url) || { said: ['', ''], busy: '', spare: false };
   panels.set(url, st);
   const msg = st.msg = h('p', { class: 'msg', 'aria-live': 'polite' });
   const say = (t, k = '') => { st.said = [t, k]; st.msg.textContent = t; st.msg.className = 'msg ' + k; };
   const btns = st.btns = h('div', { class: 'btns' });
   const labels = () => st.btns.querySelectorAll('button').forEach(b => { b.textContent = st.busy === b.dataset.what ? 'Stop' : b.dataset.label; });
-  const run = async (what, fn, done) => {
-    if (st.busy) { cancelNfc(); return false; }
+  // One press: what fn answers ('written', 'same', 'kept', 'locked'), or null when it failed or was stopped (said here).
+  // Pressed again while it waits for the sticker, the button stops it.
+  const run = async (what, fn) => {
+    if (st.busy) { cancelNfc(); return null; }
     st.busy = what; labels();
-    say('Hold the sticker flat against the back of the phone, near the top, and keep it still.', 'wait');
-    try { await fn(); buzz(80); say(done, 'ok'); }
-    catch (e) { buzz([40, 60, 40]); say(await explainNfc(e, what), e.name === 'AbortError' ? '' : 'bad'); return false; }
+    say(HOLD, 'wait');
+    try { return await fn(); }
+    catch (e) { buzz([40, 60, 40]); say(await explainNfc(e, what), e.name === 'AbortError' ? '' : 'bad'); return null; }
     finally { st.busy = ''; labels(); }
-    return true;
+  };
+  // Write tries first not to write over anything. A sticker that already holds something is read where it is, against
+  // the phone: this link already ('same', nothing written); nothing after all (a blank one turned down anyway: written);
+  // or something else, written over only when asked, so the jar or bin next door can't be rewritten by accident while
+  // the sticker in the hand stays blank. Locked, the write over says so.
+  const write = async () => {
+    try { await writeUrl(url, { overwrite: false }); return 'written'; }
+    catch (e) { if (!refusedWrite(e)) throw e; }
+    const held = await readOnce();
+    if (held.url && sameLink(held.url, url)) return 'same';
+    if (!held.blank) {
+      const what = held.url ? `It already opens ${opens(held.url, nameOf)}.` : 'It already holds something that isn\'t a link.';
+      if (!await confirmSheet('Write over this sticker?', `${what} Writing over it makes it open ${name} instead. Hold it to the phone again after you press Write over it.`, 'Write over it', { danger: true })) return 'kept';
+      say(HOLD, 'wait');
+    }
+    await writeUrl(url, { overwrite: true });
+    return 'written';
   };
   btns.append(h('button', { type: 'button', class: 'btn', 'data-what': 'write', 'data-label': label, onclick: async () => {
-    if (await run('write', () => writeUrl(url), lock && !sample ? 'Written. Tap it with the phone to check, then lock it.' : 'Written. Tap it with the phone to check it opens this page.')) onWritten?.();
+    const r = await run('write', write);
+    if (r === 'written') { buzz(80); say(lock && !sample ? 'Written. Tap it with the phone to check, then lock it.' : 'Written. Tap it with the phone to check it opens this page.', 'ok'); onWritten?.(); }
+    // a sticker already holding the link is written as far as anyone can tell: saved as written if it wasn't yet
+    else if (r === 'same') { buzz(80); say('Already holds this link.', 'ok'); if (!tagged && !locked) onWritten?.(); }
+    else if (r === 'kept') say('Nothing written. The sticker keeps its old link.');
   } }, label));
+  // Lock reads the sticker first and locks only one that holds this link: locking can't be undone, and a sticker locked
+  // on the wrong system would open the wrong page for good.
+  const refuse = got => got.url && sameLink(got.url, url) ? '' : got.url ? `This sticker opens ${opens(got.url, nameOf)}, not ${name}. Nothing was locked.`
+    : got.blank ? 'This sticker is blank. Write it first, then lock it.' : `This sticker doesn't hold the link for ${name}. Nothing was locked.`;
   if (lock) btns.append(h('button', { type: 'button', class: 'btn ghost', 'data-what': 'lock', 'data-label': 'Lock sticker', disabled: sample, onclick: async () => {
     if (sample) return;
     if (!st.busy && !await confirmSheet('Lock this sticker?', 'Locking is permanent: nobody can rewrite it, you included. Do it only after a tap opens the right page. The link can still be pointed elsewhere from Switchboard.', 'Lock it', { danger: true })) return;
-    if (await run('lock', () => lockTag(), 'Locked. It will open this page for good.')) { st.spare = false; onLocked?.(); }
+    if (await run('lock', () => lockTag({ check: refuse }).then(() => 'locked')) !== 'locked') return;
+    buzz(80); say('Locked. It will open this page for good.', 'ok'); st.spare = false; onLocked?.();
   } }, 'Lock sticker'));
   labels();
   if (!nfcSupported()) {
