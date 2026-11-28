@@ -31,3 +31,9 @@ test('nothing typed finds everything', () => {
   assert.deepEqual(words(' Ground  cumin, '), ['ground', 'cumin']);
   assert.equal(fold('Crème Brûlée’s'), 'creme brulees');
 });
+
+test('find.js spells its accents and curly quotes as \\u escapes, so an editor or a paste can\'t quietly change them', async () => {
+  const { readFileSync } = await import('node:fs');
+  const code = readFileSync(new URL('../js/kit/find.js', import.meta.url), 'utf8').split('\n').filter(l => !l.trim().startsWith('//'));
+  for (const line of code) assert.doesNotMatch(line, /[^\x00-\x7e]/, `a character typed as itself, not as an escape: ${JSON.stringify(line)}`);
+});
