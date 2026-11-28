@@ -8,8 +8,10 @@ const panels = new Map();
 
 // tagged and locked are the days (YYYY-MM-DD) the app saved when this sticker was written and locked. In the sample
 // (sample: true) Write still writes a real sticker, which is handy for trying the phone's reader, but Lock is off: it
-// can't be undone, and the sample's pages aren't the real ones.
-export function nfcPanel(url, { label = 'Write sticker', lock = false, onWritten = null, onLocked = null, note = '', tagged = null, locked = null, sample = false } = {}) {
+// can't be undone, and the sample's pages aren't the real ones. move: what the locked line says after its date, how to
+// send a locked sticker somewhere else (Switchboard's OVERRIDES unless the app has its own way).
+export const MOVE = 'To send it somewhere else, add it to OVERRIDES in Switchboard\'s 404.html.';
+export function nfcPanel(url, { label = 'Write sticker', lock = false, onWritten = null, onLocked = null, note = '', tagged = null, locked = null, sample = false, move = MOVE } = {}) {
   const st = panels.get(url) || { said: ['', ''], busy: '', spare: false };
   panels.set(url, st);
   const msg = st.msg = h('p', { class: 'msg', 'aria-live': 'polite' });
@@ -40,7 +42,7 @@ export function nfcPanel(url, { label = 'Write sticker', lock = false, onWritten
   } else say(...st.said);
   // A locked sticker can't be written again, so Write and Lock wait behind "Replace or make a spare": a new blank
   // sticker for the same page (the app saves it as written, not locked, until that one is locked too).
-  const state = locked ? `Locked ${dayText(locked)}. To send it somewhere else, use Switchboard.`
+  const state = locked ? `Locked ${dayText(locked)}. ${move}`
     : tagged ? `Written ${dayText(tagged)}${lock ? ', not locked yet' : ''}.` : lock ? 'Not written yet.' : '';
   const spare = h('div', {}, h('p', { class: 'msg' }, 'Use a new blank sticker. The old one, wherever it is, keeps opening this page.'), btns);
   const hidden = locked && !st.spare && !st.busy;
