@@ -102,15 +102,17 @@ function shown(d) { const o = Object.assign({}, d); delete o.tagged; delete o.lo
 // since its answer never reached the page: a tab closed while it was on its way, or Android dropped it) isn't made a
 // second time, after Home Assistant or another device has acted on the first, and answers again: true. The last 500
 // stamps are kept in the script's properties (up to 14 characters each, under Google's 9 KB a value). Writes without
-// one (Home Assistant, Pinch, Cellmate) are always made.
+// one (Home Assistant, Pinch, Cellmate) are always made. Each tab's id column is read once for the whole batch, not
+// once a write: write() keeps that copy up to date as it writes.
 function batch(ops) {
   const props = PropertiesService.getScriptProperties(), seen = String(props.getProperty('APPLIED') || '').split(' ').filter(String), had = seen.length;
   const stamp = function (o) { return o && typeof o.q === 'string' && /^[a-z0-9]{6,14}$/.test(o.q) ? o.q : ''; };
+  const ids = {};
   try {
     return { ok: true, results: ops.map(function (o) {
       const q = stamp(o);
       if (q && seen.indexOf(q) >= 0) return { ok: true, id: String(o.id), again: true };
-      const r = write(o);
+      const r = write(o, ids);
       if (q) seen.push(q);
       return r;
     }) };
@@ -239,8 +241,9 @@ function mend(s) {
 // brings it back) or add (a new record, id made up if missing). A put with ifUpdated is made only on the version of
 // the record it names (its updated time) and only if it isn't deleted; otherwise it changes nothing and answers
 // skipped: Home Assistant's "added to the list" mark, so it never brings back an entry Larder took back after Home
-// Assistant read it. The same put made again (its answer lost on the way) counts as made and changes nothing.
-function write(o) {
+// Assistant read it. The same put made again (its answer lost on the way) counts as made and changes nothing. ids, from
+// a batch: each tab's id column as read once for the whole batch, kept up to date here.
+function write(o, ids) {
   const name = checkName(String(o.app) + '.' + String(o.coll));
   let id = o.id != null ? String(o.id) : (o.doc && o.doc.id ? String(o.doc.id) : '');
   if (o.op === 'add' && !id) id = Utilities.getUuid().slice(0, 8);
@@ -254,7 +257,8 @@ function write(o) {
     json = JSON.stringify(doc);
     if (json.length > 45000) throw new Error('record too big');
   }
-  const cells = s.getLastRow() > 1 ? s.getRange(2, 1, s.getLastRow() - 1, 1).getValues().map(function (r) { return r[0]; }) : [];
+  const cells = ids && ids[name] || (s.getLastRow() > 1 ? s.getRange(2, 1, s.getLastRow() - 1, 1).getValues().map(function (r) { return r[0]; }) : []);
+  if (ids) ids[name] = cells;
   // the rows holding this record: every row with its id, should a tab have two. Version 1.0 of this script didn't keep
   // ids as text, so a sheet it wrote can hold the tote number 01 as the number 1 (see mend()): with no row for the exact
   // id, a row holding that number is this record. It's written back as text, and the "1" phones listed from it is
@@ -276,9 +280,9 @@ function write(o) {
   }
   if (o.op === 'del') json = cur && cur[3] !== '' ? String(cur[3]) : '';
   const row = [id, now, o.op === 'del', json];
-  at.forEach(function (i) { asText(s, i + 2); s.getRange(i + 2, 1, 1, 4).setValues([row]); });
-  if (old) { asText(s, s.getLastRow() + 1); s.appendRow([old, now, true, '']); }
-  if (!at.length) { asText(s, s.getLastRow() + 1); s.appendRow(row); }
+  at.forEach(function (i) { asText(s, i + 2); s.getRange(i + 2, 1, 1, 4).setValues([row]); cells[i] = id; });
+  if (old) { asText(s, s.getLastRow() + 1); s.appendRow([old, now, true, '']); cells.push(old); }
+  if (!at.length) { asText(s, s.getLastRow() + 1); s.appendRow(row); cells.push(id); }
   return { ok: true, id: id, updated: now };
 }
 

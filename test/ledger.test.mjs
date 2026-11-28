@@ -156,6 +156,41 @@ test('put, list since, replace, delete and batch', () => {
   assert.match(post(g, { key, op: 'put', app: 'Bad Name', coll: 'x', id: 'a', doc: {} }).error, /bad app/);
 });
 
+test('a batch reads each tab\'s ids once, not once a write, and still keeps one row a record', () => {
+  const { g, props, sheets } = fakeGoogle();
+  g.setup();
+  const key = props.KEY;
+  post(g, { key, op: 'put', app: 'larder', coll: 'items', id: 'cumin', doc: { name: 'Cumin' } });
+  post(g, { key, op: 'put', app: 'larder', coll: 'weighs', id: 'cumin', doc: { item: 'cumin', gross: 210.4 } });
+  v10Totes(g);                                                     // tote 01 as 1.0 left it: the number 1
+  const reads = {};
+  for (const n of ['larder.items', 'larder.weighs', 'mothball.totes']) {
+    const s = sheets[n], range = s.getRange;
+    s.getRange = (r, c, nr = 1, nc = 1) => {
+      const x = range(r, c, nr, nc);
+      if (r === 2 && c === 1 && nc === 1) { const values = x.getValues; x.getValues = () => { reads[n] = (reads[n] || 0) + 1; return values(); }; }
+      return x;
+    };
+  }
+  const ops = [];
+  for (let i = 0; i < 2; i++) for (const id of ['a', 'b', 'c', 'd', 'e']) ops.push({ op: 'put', app: 'larder', coll: 'items', id, doc: { name: id + i } });
+  ops.push({ op: 'del', app: 'larder', coll: 'items', id: 'c' }, { op: 'add', app: 'larder', coll: 'items', doc: { name: 'Added' } });
+  for (const id of ['cumin', 'sage', 'cumin']) ops.push({ op: 'put', app: 'larder', coll: 'weighs', id, doc: { item: id, gross: 200 + ops.length } });
+  ops.push({ op: 'put', app: 'mothball', coll: 'totes', id: '01', doc: { name: 'Lights' } }, { op: 'put', app: 'mothball', coll: 'totes', id: '01', doc: { name: 'Lights and wreaths' } });
+  const res = post(g, { key, op: 'batch', ops }), added = res.results[11].id;
+  assert.equal(res.ok, true);
+  assert.deepEqual(reads, { 'larder.items': 1, 'larder.weighs': 1, 'mothball.totes': 1 }, 'a tab\'s ids were read for each write in the batch');
+  // what the sheet holds is what it held when every write read the column afresh
+  const ids = n => sheets[n].data.slice(1).map(r => r[0]);
+  assert.deepEqual(ids('larder.items'), ['cumin', 'a', 'b', 'c', 'd', 'e', added], 'a record written twice in one batch got two rows');
+  assert.deepEqual(ids('larder.weighs'), ['cumin', 'sage'], 'a jar weighed twice in one batch got two rows');
+  assert.deepEqual(ids('mothball.totes'), ['01', 2, '1'], '1.0\'s tote 1: written back as 01 once, with one deleted "1" for the phones');
+  const docs = post(g, { key, op: 'list', app: 'larder', coll: 'items', since: 0 }).docs;
+  assert.deepEqual(docs.map(d => [d.id, d.name ?? null, !!d._deleted]), [['cumin', 'Cumin', false], ['a', 'a1', false], ['b', 'b1', false], ['c', 'c1', true], ['d', 'd1', false], ['e', 'e1', false], [added, 'Added', false]]);
+  assert.equal(post(g, { key, op: 'get', app: 'larder', coll: 'weighs', id: 'cumin' }).doc.gross, 214, 'the jar\'s newest weighing');
+  assert.equal(post(g, { key, op: 'get', app: 'mothball', coll: 'totes', id: '01' }).doc.name, 'Lights and wreaths');
+});
+
 test('tote and pack numbers stay text: 01 is saved twice as one row and lists back as 01', () => {
   const { g, props, sheets } = fakeGoogle();
   g.setup();
