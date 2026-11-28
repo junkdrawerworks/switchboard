@@ -67,6 +67,9 @@ function handle(q) {
     if (op === 'ping' && !q.key) return { ok: true, app: 'switchboard-ledger', version: VERSION };
     if (op === 'pub') {
       if (PUBLIC_READ.indexOf(name) < 0) return { ok: false, error: 'not public' };
+      // the manual's tab renamed or deleted by hand: an error, so each tenant's phone keeps the copy it has (an answer
+      // with no pages would replace it with an empty manual); a manual never started reads as empty
+      if (!tab(name, false)) return madeTabs().indexOf(name) >= 0 ? { ok: false, error: 'the sheet has no ' + name + ' tab' } : { ok: true, docs: [] };
       return { ok: true, docs: list(name, 0, null).filter(function (d) { return !d._deleted; }).map(shown) };
     }
     if (op === 'report') return report(name, q.doc);

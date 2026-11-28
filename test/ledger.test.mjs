@@ -1381,6 +1381,19 @@ test('the tabs the script made are kept as it makes them, setup adds the sheet\'
   assert.equal(post(g, { key, op: 'list', app: 'placard', coll: 'reports', since: 0 }).docs.length, 1);
 });
 
+test('the house manual\'s tab renamed or deleted: a tenant\'s read fails (so the phone keeps its copy); a manual not started yet reads as empty', () => {
+  const { g, props, sheets } = fakeGoogle();
+  g.setup();
+  assert.deepEqual(get(g, { op: 'pub', app: 'placard', coll: 'site' }), { ok: true, docs: [] }, 'a manual not started yet');
+  post(g, { key: props.KEY, op: 'put', app: 'placard', coll: 'site', id: 'water-heater', doc: { name: 'Water heater' } });
+  assert.deepEqual(get(g, { op: 'pub', app: 'placard', coll: 'site' }).docs.map(d => d.id), ['water-heater']);
+  const kept = sheets['placard.site']; delete sheets['placard.site'];
+  assert.deepEqual(get(g, { op: 'pub', app: 'placard', coll: 'site' }), { ok: false, error: 'the sheet has no placard.site tab' },
+    'every tenant\'s copy of the manual would be replaced with an empty one');
+  sheets['placard.site'] = kept;
+  assert.equal(get(g, { op: 'pub', app: 'placard', coll: 'site' }).docs.length, 1);
+});
+
 test('the day\'s whole list keeps a record that is waiting to go, or changed here after the list was asked for', async t => {
   const { net, open, sheets, g } = await world();
   t.mock.timers.enable({ apis: ['Date'], now: Date.now() });
