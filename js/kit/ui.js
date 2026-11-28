@@ -209,7 +209,22 @@ export const sampleLink = () => h('a', { class: 'sample-out', href: './' }, 'Lea
 
 export const buzz = p => { try { navigator.vibrate?.(p); } catch {} };
 
-// QR code as an SVG string (needs js/kit/qrcode.js loaded as a classic script).
+// The QR library (js/kit/qrcode.js, 56 KB) is loaded only by a screen that draws codes (Placard's QR stickers,
+// Mothball's label), so a tenant's first tap never waits for it. loadQr() adds it to the page once and resolves when it
+// has run; one that failed is tried again on the next call. It stays in the offline copy, so printing works offline.
+let qrLoading = null;
+export function loadQr() {
+  if (window.qrcode) return Promise.resolve();
+  return qrLoading ||= new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = 'js/kit/qrcode.js';
+    s.onload = () => resolve();
+    s.onerror = () => { s.remove(); qrLoading = null; reject(new Error('qrcode.js did not load')); };
+    document.head.append(s);
+  });
+}
+
+// QR code as an SVG string (after loadQr()).
 export function qrSvg(text, { size = 120, margin = 2 } = {}) {
   const q = window.qrcode(0, 'M'); q.addData(text); q.make();
   const n = q.getModuleCount(), w = n + margin * 2;
