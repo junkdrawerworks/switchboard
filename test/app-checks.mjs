@@ -255,6 +255,11 @@ export async function appChecks({ page, ctx, base, assert, problems }) {
   await page.reload();
   await page.waitForFunction(() => document.querySelector('#ledger-state').classList.contains('badkey'));
   assert.deepEqual(await state(), ['sync badkey', 'Wrong key — copy B2 from the sheet\'s About tab again']);
+  // a key the ledger turned down isn't handed to the apps: no Connect, and the card says what to do
+  assert.equal(await page.locator('#app-list a').count(), 0, 'Connect offered with a key the ledger turned down');
+  assert.deepEqual(await page.locator('#app-list .meta').allTextContents(), Array(5).fill('fix the key first'));
+  assert.equal(await page.locator('#apps-msg').textContent(), 'The key here is out of date. Paste the new one from the sheet\'s About tab (B2), then Test and save.');
+  assert.equal(await page.locator('#apps-msg').isVisible(), true);
   // a new key typed while it was asking isn't put back by the answer
   google = 'down';
   await page.reload();
@@ -265,6 +270,8 @@ export async function appChecks({ page, ctx, base, assert, problems }) {
   google = 'up';
   await page.click('#ledger-test');
   await page.waitForFunction(() => document.querySelector('#ledger-state').textContent === 'Connected to ledger v1.1');
+  assert.equal(await page.locator('#app-list a').count(), 5, 'Connect didn\'t come back with the new key');
+  assert.equal(await page.locator('#apps-msg').isVisible(), false);
   // the test tag's landing note
   await page.goto('about:blank'); await page.goto(base + '#test');
   assert.equal(await page.locator('#test-ok').isHidden(), false, 'the test tag note shows');

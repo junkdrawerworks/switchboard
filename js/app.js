@@ -115,15 +115,20 @@ $('#ledger-forget').addEventListener('click', async () => {
   toast('Forgotten on this device.');
 });
 
+// A key the ledger turned down when Switchboard opened (setup run again in the sheet) would go to each app in its Connect
+// link and be turned down there too, so the rows wait for the new one instead.
 function renderApps() {
-  const list = $('#app-list');
+  const list = $('#app-list'), stale = ledger.connected && answer?.error?.kind === 'badkey';
+  const said = $('#apps-msg');
+  said.textContent = stale ? 'The key here is out of date. Paste the new one from the sheet\'s About tab (B2), then Test and save.' : '';
+  said.hidden = !stale;
   mount(list, appOrder.map(l => {
     const a = APPS[l];
-    const link = ledger.connected ? connectLink(a.base, ledger.cfg.url, ledger.cfg.key) : null;
+    const link = ledger.connected && !stale ? connectLink(a.base, ledger.cfg.url, ledger.cfg.key) : null;
     return h('li', {}, h('div', { class: 'row' },
       h('span', { class: 'chip acc' }, l),
       h('span', { class: 'main' }, h('span', { class: 't' }, a.name), h('span', { class: 's' }, blurb[l])),
-      link ? h('a', { class: 'btn', href: link, target: '_blank', rel: 'noopener' }, 'Connect') : h('span', { class: 'meta' }, 'ledger first')));
+      link ? h('a', { class: 'btn', href: link, target: '_blank', rel: 'noopener' }, 'Connect') : h('span', { class: 'meta' }, stale ? 'fix the key first' : 'ledger first')));
   }));
 }
 
