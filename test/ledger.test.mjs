@@ -342,6 +342,18 @@ test('the tenants\' pages (pub) leave out when each sticker was written or locke
   assert.deepEqual([own.tagged, own.locked, own._updated > 0], ['2026-11-20', '2026-11-21', true]);
 });
 
+test('the tenants\' pages (pub) leave out the spare sticker\'s days too, and the owner\'s list keeps them', () => {
+  const { g, props } = fakeGoogle();
+  g.setup();
+  post(g, { key: props.KEY, op: 'put', app: 'placard', coll: 'site', id: 'water-shutoff', doc: { name: 'Main water shutoff', emergency: true, tagged: '2026-11-20', locked: '2026-11-20', spare: '2026-11-22', spareLocked: '2026-11-23' } });
+  post(g, { key: props.KEY, op: 'put', app: 'placard', coll: 'site', id: 'house', doc: { title: 'House manual', tagged: '2026-11-20', spare: '2026-11-22', spareLocked: null } });
+  const docs = get(g, { op: 'pub', app: 'placard', coll: 'site' }).docs;
+  assert.deepEqual(docs.find(d => d.id === 'water-shutoff'), { id: 'water-shutoff', name: 'Main water shutoff', emergency: true }, 'a tenant\'s phone got the spare\'s days');
+  assert.deepEqual(docs.find(d => d.id === 'house'), { id: 'house', title: 'House manual' });
+  const own = post(g, { key: props.KEY, op: 'list', app: 'placard', coll: 'site', since: 0 }).docs.find(d => d.id === 'water-shutoff');
+  assert.deepEqual([own.spare, own.spareLocked], ['2026-11-22', '2026-11-23']);
+});
+
 test('only a real report counts towards the hour', () => {
   const { g, props } = fakeGoogle();
   g.setup();

@@ -95,9 +95,9 @@ function handle(q) {
   }
 }
 
-// A page as anyone may read it: not when its sticker was written or locked, nor when it last changed (the owner's list
-// has those; the tenants' pages use none of them).
-function shown(d) { const o = Object.assign({}, d); delete o.tagged; delete o.locked; delete o._updated; return o; }
+// A page as anyone may read it: not when its sticker (or its spare) was written or locked, nor when it last changed
+// (the owner's list has those; the tenants' pages use none of them).
+function shown(d) { const o = Object.assign({}, d); delete o.tagged; delete o.locked; delete o.spare; delete o.spareLocked; delete o._updated; return o; }
 // A batch from an app. Each of the apps' writes carries its own stamp q: one already made here (a write sent again,
 // since its answer never reached the page: a tab closed while it was on its way, or Android dropped it) isn't made a
 // second time, after Home Assistant or another device has acted on the first, and answers again: true. The last 500
