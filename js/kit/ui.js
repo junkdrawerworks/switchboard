@@ -45,8 +45,9 @@ export function toast(text, kind = '') {
 // the focus anyway. With a mouse and keyboard the first field has it. The title names the sheet for a screen reader.
 // draft: a name for a long edit sheet ('page:water-heater', 'jar:new'). What's typed in it is kept for this tab as it's
 // typed (sessionStorage, which a reload keeps: Android reloads a tab left in the background for a call or another
-// app), and the sheet opened again under that name fills it back in and says "Restored what you were typing.", with
-// Discard for what the record holds. Save, Cancel, Delete or closing the sheet any other way clears it.
+// app), only the fields typed into, and the sheet opened again under that name fills those back in and says "Restored
+// what you were typing.", with Discard for what the record holds; the other fields show the record as it is now.
+// Save, Cancel, Delete or closing the sheet any other way clears it.
 let sheets = 0;
 const DRAFT = 'sheet-draft:';
 export const draftOf = name => { try { return JSON.parse(sessionStorage.getItem(DRAFT + name) || 'null'); } catch { return null; } };
@@ -86,10 +87,12 @@ export function sheet({ title, fields = [], body = null, ok = 'Save', danger = n
       const was = Object.fromEntries(Object.entries(inputs).map(([k, el]) => [k, el.value]));
       const fits = (el, v) => el.tagName !== 'SELECT' || !el.options || [...el.options].some(o => o.value === v);
       const typed = draftOf(draft) || {}, back = Object.keys(typed).filter(k => inputs[k] && typeof typed[k] === 'string' && typed[k] !== was[k] && fits(inputs[k], typed[k]));
+      // only the fields typed into (those that differ from the record): one nobody touched isn't kept, so a draft
+      // restored later never puts back a value another device has changed since
       const keep = () => {
         if (closed) return;
-        const now = Object.fromEntries(Object.entries(inputs).map(([k, el]) => [k, el.value]));
-        keepDraft(draft, Object.keys(now).some(k => now[k] !== was[k]) ? now : null);
+        const diff = Object.fromEntries(Object.entries(inputs).map(([k, el]) => [k, el.value]).filter(([k, v]) => v !== was[k]));
+        keepDraft(draft, Object.keys(diff).length ? diff : null);
       };
       if (back.length) {
         for (const k of back) inputs[k].value = typed[k];

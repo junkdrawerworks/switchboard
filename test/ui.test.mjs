@@ -259,7 +259,7 @@ test('a long edit sheet keeps what was typed for this tab through a reload, unti
     assert.equal(note(p), undefined, 'a sheet with nothing typed before says it restored something');
     assert.deepEqual(Object.keys(store), [], 'kept before anything was typed');
     typed(p, 'steps', 'Turn the dial to Vacation\nCall the plumber');
-    assert.deepEqual(JSON.parse(store['sheet-draft:page:water-heater']), { name: 'Water heater', steps: 'Turn the dial to Vacation\nCall the plumber' });
+    assert.deepEqual(JSON.parse(store['sheet-draft:page:water-heater']), { steps: 'Turn the dial to Vacation\nCall the plumber' }, 'kept a field nobody typed into');
     // the tab reloads with the sheet open (the page goes; the sheet never closed): opened again, it's all back, and says so
     p = fakePage();
     let done = sheet({ title: 'Edit Water heater', fields: page(), draft: 'page:water-heater' });
@@ -301,5 +301,35 @@ test('a long edit sheet keeps what was typed for this tab through a reload, unti
     typed(p, 'steps', 'Turn the dial ');
     typed(p, 'steps', 'Turn the dial');
     assert.deepEqual(Object.keys(store), [], 'kept with nothing changed from the record');
+  } finally { delete globalThis.sessionStorage; }
+});
+
+test('a draft brings back only what was typed, not a field another device changed meanwhile', async () => {
+  const store = {};
+  globalThis.sessionStorage = { getItem: k => store[k] ?? null, setItem: (k, v) => { store[k] = String(v); }, removeItem: k => { delete store[k]; } };
+  try {
+    const { sheet, RESTORED } = await import('../js/kit/ui.js');
+    const page = name => [{ name: 'name', label: 'Name', value: name }, { name: 'steps', label: 'What to do', type: 'textarea', value: 'Turn the dial' }];
+    const typed = (p, name, v) => { p.field(name).value = v; p.dialog().find(n => n.tagName === 'FORM').dispatchEvent(new Event('input')); };
+    let p = fakePage();
+    sheet({ title: 'Edit Water heater', fields: page('Water heater'), draft: 'page:water-heater' });
+    typed(p, 'steps', 'Turn the dial to Vacation');   // only the steps typed
+    // the tab reloads with the sheet open; meanwhile the laptop renamed the page, and that reached this phone
+    p = fakePage();
+    const done = sheet({ title: 'Edit Water heater, basement', fields: page('Water heater, basement'), draft: 'page:water-heater' });
+    assert.equal(p.field('name').value, 'Water heater, basement', 'the name changed on the laptop was put back to the old one');
+    assert.equal(p.field('steps').value, 'Turn the dial to Vacation');
+    assert.equal(p.dialog().find(n => /draft-note/.test(n.className)).find(n => n.tagName === 'P').textContent, RESTORED);
+    assert.deepEqual(JSON.parse(store['sheet-draft:page:water-heater']), { steps: 'Turn the dial to Vacation' });
+    p.submit(); await later();
+    assert.deepEqual(await done, { name: 'Water heater, basement', steps: 'Turn the dial to Vacation' });
+    // typed, and the laptop made the same change meanwhile: nothing to bring back, so no line, and nothing kept
+    p = fakePage();
+    sheet({ title: 'Edit Water heater', fields: page('Water heater'), draft: 'page:water-heater' });
+    typed(p, 'name', 'Water heater, basement');
+    p = fakePage();
+    sheet({ title: 'Edit Water heater, basement', fields: page('Water heater, basement'), draft: 'page:water-heater' });
+    assert.equal(p.dialog().find(n => /draft-note/.test(n.className)), undefined);
+    assert.deepEqual(Object.keys(store), []);
   } finally { delete globalThis.sessionStorage; }
 });
