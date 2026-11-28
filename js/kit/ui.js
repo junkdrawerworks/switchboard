@@ -45,8 +45,9 @@ export function toast(text, kind = '') {
 // the focus anyway. With a mouse and keyboard the first field has it. The title names the sheet for a screen reader.
 let sheets = 0;
 export const CHECK_FAILED = 'Not saved: something went wrong. Try again.';
-// okDanger: the submit button is the red one (a confirm that deletes, locks or clears for good).
-export function sheet({ title, fields = [], body = null, ok = 'Save', danger = null, other = null, check = null, autofocus = false, okDanger = false }) {
+// okDanger: the submit button is the red one (a confirm that deletes, locks or clears for good). cancel: null for a
+// question with two answers and no Cancel (other and ok are the answers; Escape still closes it, as null).
+export function sheet({ title, fields = [], body = null, ok = 'Save', danger = null, other = null, check = null, autofocus = false, okDanger = false, cancel = 'Cancel' }) {
   return new Promise(resolve => {
     const head = h('h2', { id: `sheet-${++sheets}-title` }, title);
     const dlg = h('dialog', { class: 'sheet', 'aria-labelledby': head.id });
@@ -70,7 +71,7 @@ export function sheet({ title, fields = [], body = null, ok = 'Save', danger = n
       danger ? h('button', { type: 'button', class: 'btn danger ghost', onclick: () => { dlg.close(); resolve({ __danger: true }); } }, danger) : null,
       other ? h('button', { type: 'button', class: 'btn ghost', onclick: () => { dlg.close(); resolve({ __other: true }); } }, other) : null,
       h('span', { class: 'grow' }),
-      h('button', { type: 'button', class: 'btn ghost', onclick: () => { dlg.close(); resolve(null); } }, 'Cancel'),
+      cancel ? h('button', { type: 'button', class: 'btn ghost', onclick: () => { dlg.close(); resolve(null); } }, cancel) : null,
       h('button', { type: 'submit', class: okDanger ? 'btn danger' : 'btn' }, ok));
     form.append(bar);
     let checking = false;
